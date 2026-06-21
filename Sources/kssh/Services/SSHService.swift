@@ -45,10 +45,12 @@ struct SSHService {
     static func isAgentRunning() async -> Bool {
         let result = await ProcessRunner.run("ssh-add", arguments: ["-l"])
         guard let output = result else { return false }
-        if output.exitCode == 0 { return true }
-        if output.exitCode == 1 && output.output.isEmpty { return true }
-        if output.exitCode == 2 { return false }
-        return output.exitCode == 0
+        // `ssh-add -l` exit codes:
+        //   0 -> agent reachable, has identities
+        //   1 -> agent reachable, no identities ("The agent has no identities.")
+        //   2 -> could not connect to the agent (not running / wrong SSH_AUTH_SOCK)
+        // The agent is "running" for 0 and 1; only 2 means it's unavailable.
+        return output.exitCode == 0 || output.exitCode == 1
     }
 
     static func agentPid() async -> String? {

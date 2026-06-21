@@ -13,11 +13,15 @@ enum ProcessRunner {
     private static let resolvedEnvironment: [String: String] = {
         var env = ProcessInfo.processInfo.environment
 
-        // Resolve the ssh-agent socket from the launchd user domain when our own
-        // environment is missing it (the common GUI-launch case).
-        if (env["SSH_AUTH_SOCK"]?.isEmpty ?? true),
-           let sock = launchctlGetenv("SSH_AUTH_SOCK") {
-            env["SSH_AUTH_SOCK"] = sock
+        // Resolve the ssh-agent socket when our own environment is missing it
+        // (the common GUI-launch case). Try the launchd user domain first, then
+        // fall back to discovering the macOS native ssh-agent socket on disk.
+        if env["SSH_AUTH_SOCK"]?.isEmpty ?? true {
+            if let sock = launchctlGetenv("SSH_AUTH_SOCK") {
+                env["SSH_AUTH_SOCK"] = sock
+            } else if let sock = nativeAgentSocket() {
+                env["SSH_AUTH_SOCK"] = sock
+            }
         }
 
         // Ensure common tool locations are on PATH (Homebrew on Apple Silicon / Intel).
@@ -53,6 +57,29 @@ enum ProcessRunner {
         let value = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (value?.isEmpty == false) ? value : nil
+    }
+
+    /// Discovers the macOS native ssh-agent socket, which launchd injects into shell
+    /// sessions as `/private/tmp/com.apple.launchd.XXXX/Listeners` but does NOT expose
+    /// via `launchctl getenv`. A GUI-launched app therefore can't see it through the
+    /// environment, so we probe the well-known directory directly. Returns the most
+    /// recently created `Listeners` socket, or nil if none is found.
+    private static func nativeAgentSocket() -> String? {
+        let base = "/private/tmp"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: base) else { return nil }
+
+        let candidates = entries
+            .filter { $0.hasPrefix("com.apple.launchd.") }
+            .map { "\(base)/\($0)/Listeners" }
+            .filter { fm.fileExists(atPath: $0) }
+
+        // Prefer the newest socket if several launchd dirs linger after re-logins.
+        return candidates.max { lhs, rhs in
+            let lDate = (try? fm.attributesOfItem(atPath: lhs)[.creationDate]) as? Date ?? .distantPast
+            let rDate = (try? fm.attributesOfItem(atPath: rhs)[.creationDate]) as? Date ?? .distantPast
+            return lDate < rDate
+        }
     }
 
     static func run(_ command: String, arguments: [String] = [], timeout: TimeInterval = 5) async -> Result? {
