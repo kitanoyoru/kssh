@@ -54,7 +54,7 @@ struct MenuBarView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("kssh")
                     .font(.headline)
-                Text("Identity status")
+                Text("Created by @kitanoyoru")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
