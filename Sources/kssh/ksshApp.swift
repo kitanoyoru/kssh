@@ -13,16 +13,24 @@ struct ksshApp: App {
 
     var body: some Scene {
         MenuBarExtra("kssh", systemImage: "key.horizontal") {
-            MenuBarView(viewModel: viewModel)
+            MenuBarView(viewModel: viewModel, store: viewModel.store)
         }
         .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView()
+                .managedWindowActivation()
         }
 
         Window("Create GPG Key", id: "create-gpg-key") {
             CreateGPGKeyView(viewModel: viewModel)
+                .managedWindowActivation()
+        }
+        .windowResizability(.contentSize)
+
+        Window("Manage Git Profiles", id: "manage-git-profiles") {
+            ManageProfilesView(store: viewModel.store)
+                .managedWindowActivation()
         }
         .windowResizability(.contentSize)
     }

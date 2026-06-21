@@ -26,8 +26,17 @@ final class StatusViewModel: ObservableObject {
     @Published var creatingGPGKey = false
     @Published var gpgCreateError: String?
 
-    private let store = SettingsStore()
+    /// Git profile (work/study) currently being applied.
+    @Published var switchingProfile: String?
+
+    /// Shared so the menu and the Manage-profiles window observe the same instance.
+    let store = SettingsStore()
     private var refreshTask: Task<Void, Never>?
+
+    /// The stored profile whose name+email match the current global git config, if any.
+    var activeProfile: GitProfile? {
+        GitProfile.active(in: store.gitProfiles, matching: gitIdentity)
+    }
 
     /// Started from `MenuBarView.onAppear` and cancelled on `onDisappear`. Because
     /// `MenuBarExtra(.window)` tears down the view when the popover closes, this loop is
@@ -117,6 +126,24 @@ final class StatusViewModel: ObservableObject {
 
         do {
             try await SSHIdentityService.activate(identity)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+        await refresh()
+    }
+
+    /// Applies a git profile to global git config (user.name/user.email), then refreshes.
+    /// Mirrors switchIdentity. A partial write surfaces via `error`; the refresh re-reads
+    /// the real config so the active highlight stays truthful.
+    func switchGitProfile(_ profile: GitProfile) async {
+        guard switchingProfile == nil else { return }
+        switchingProfile = profile.id
+        error = nil
+        defer { switchingProfile = nil }
+
+        do {
+            try await GitService.setIdentity(name: profile.name, email: profile.email)
         } catch {
             self.error = error.localizedDescription
             return

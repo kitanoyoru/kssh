@@ -224,6 +224,75 @@ final class NetrcReaderTests: XCTestCase {
     }
 }
 
+final class GitProfileTests: XCTestCase {
+    func testCodableRoundTrip() throws {
+        let profile = GitProfile(id: "abc", name: "Ada Lovelace", email: "ada@x.io")
+        let data = try JSONEncoder().encode(profile)
+        let decoded = try JSONDecoder().decode(GitProfile.self, from: data)
+        XCTAssertEqual(decoded, profile)
+        XCTAssertEqual(decoded.id, "abc")
+    }
+
+    func testMatches() {
+        let profile = GitProfile(name: "Ada", email: "ada@x.io")
+        XCTAssertTrue(profile.matches(GitIdentity(name: "Ada", email: "ada@x.io", signingKey: nil, signCommits: false)))
+        XCTAssertFalse(profile.matches(GitIdentity(name: "Bob", email: "ada@x.io", signingKey: nil, signCommits: false)))
+        XCTAssertFalse(profile.matches(nil))
+        XCTAssertFalse(profile.matches(GitIdentity(name: "Ada", email: nil, signingKey: nil, signCommits: false)))
+    }
+
+    func testMatchesTrimsWhitespace() {
+        let profile = GitProfile(name: "Ada ", email: " ada@x.io")
+        XCTAssertTrue(profile.matches(GitIdentity(name: "Ada", email: "ada@x.io", signingKey: nil, signCommits: false)))
+    }
+
+    func testActiveInList() {
+        let a = GitProfile(name: "Work", email: "me@work.com")
+        let b = GitProfile(name: "Study", email: "me@uni.edu")
+        let identity = GitIdentity(name: "Study", email: "me@uni.edu", signingKey: nil, signCommits: false)
+        XCTAssertEqual(GitProfile.active(in: [a, b], matching: identity)?.id, b.id)
+        XCTAssertNil(GitProfile.active(in: [a, b], matching: GitIdentity(name: "X", email: "x@x.com", signingKey: nil, signCommits: false)))
+        XCTAssertNil(GitProfile.active(in: [], matching: identity))
+    }
+}
+
+final class SettingsStoreProfileTests: XCTestCase {
+    func testEncodeDecodeRoundTrip() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        let profiles = [GitProfile(name: "Work", email: "w@x.com"), GitProfile(name: "Study", email: "s@x.com")]
+        let data = SettingsStore.encodeProfiles(profiles)!
+        defaults.set(data, forKey: "gitProfiles")
+        XCTAssertEqual(SettingsStore.loadProfiles(from: defaults), profiles)
+    }
+
+    func testLoadProfilesEmptyOnMissing() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        XCTAssertEqual(SettingsStore.loadProfiles(from: defaults), [])
+    }
+
+    func testLoadProfilesEmptyOnGarbage() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        defaults.set(Data("not json".utf8), forKey: "gitProfiles")
+        XCTAssertEqual(SettingsStore.loadProfiles(from: defaults), [])
+    }
+}
+
+final class GitServiceArgumentTests: XCTestCase {
+    func testConfigArguments() {
+        XCTAssertEqual(
+            GitService.configArguments(key: "user.name", value: "Ada Lovelace"),
+            ["config", "--global", "user.name", "Ada Lovelace"]
+        )
+    }
+
+    func testPartialWriteErrorMentionsBothKeys() {
+        let desc = GitService.GitServiceError.partialWrite(succeeded: "user.name", failed: "user.email", message: "x").errorDescription ?? ""
+        XCTAssertTrue(desc.contains("user.name"))
+        XCTAssertTrue(desc.contains("user.email"))
+        XCTAssertTrue(desc.contains("inconsistent"))
+    }
+}
+
 final class RemoteUserTests: XCTestCase {
     func testDisplayName() {
         let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1, avatarUrl: nil)

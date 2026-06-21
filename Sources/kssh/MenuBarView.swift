@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var viewModel: StatusViewModel
+    @ObservedObject var store: SettingsStore
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -173,7 +174,39 @@ struct MenuBarView: View {
             } else {
                 EmptyRow(text: "Not configured")
             }
+
+            if !store.gitProfiles.isEmpty {
+                Divider().padding(.vertical, Spacing.xxs)
+                ForEach(store.gitProfiles) { profile in
+                    GitProfileRow(
+                        profile: profile,
+                        isActive: profile.id == viewModel.activeProfile?.id,
+                        isSwitching: profile.id == viewModel.switchingProfile,
+                        disabled: viewModel.switchingProfile != nil
+                    ) {
+                        Task { await viewModel.switchGitProfile(profile) }
+                    }
+                }
+            }
+            manageProfilesButton
         }
+    }
+
+    private var manageProfilesButton: some View {
+        Button(action: { WindowActivator.activate(); openWindow(id: "manage-git-profiles") }) {
+            HStack(spacing: Spacing.xs + 1) {
+                Image(systemName: "person.2.badge.gearshape")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Manage profiles…")
+                    .font(.caption)
+                Spacer()
+            }
+            .foregroundStyle(.tint)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, Spacing.xxs)
+        .accessibilityLabel("Manage git profiles")
     }
 
     // MARK: - GPG
@@ -224,7 +257,7 @@ struct MenuBarView: View {
     }
 
     private var createGPGKeyButton: some View {
-        Button(action: { openWindow(id: "create-gpg-key") }) {
+        Button(action: { WindowActivator.activate(); openWindow(id: "create-gpg-key") }) {
             HStack(spacing: Spacing.xs + 1) {
                 Image(systemName: "plus.circle")
                     .font(.system(size: 11, weight: .semibold))
@@ -278,21 +311,22 @@ struct MenuBarView: View {
         .padding(.vertical, Spacing.sm - 2)
     }
 
-    @ViewBuilder
     private var settingsButton: some View {
-        if #available(macOS 14.0, *) {
-            SettingsLink {
-                actionLabel("Settings…", systemImage: "gearshape")
-            }
-            .buttonStyle(MenuActionButtonStyle())
-        } else {
-            Button(action: {
+        // As an accessory app we must promote + activate before opening Settings, or the
+        // window opens behind everything with no focus. Activate, then trigger Settings
+        // via the standard selector (works across macOS 14/15 where SettingsLink alone
+        // won't surface for an LSUIElement app).
+        Button(action: {
+            WindowActivator.activate()
+            if #available(macOS 14.0, *) {
                 NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            }) {
-                actionLabel("Settings…", systemImage: "gearshape")
+            } else {
+                NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
             }
-            .buttonStyle(MenuActionButtonStyle())
+        }) {
+            actionLabel("Settings…", systemImage: "gearshape")
         }
+        .buttonStyle(MenuActionButtonStyle())
     }
 
     private func actionLabel(_ title: String, systemImage: String, spin: Bool = false) -> some View {
@@ -621,6 +655,76 @@ private struct RemoteRow: View {
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
         .accessibilityHidden(true)
+    }
+}
+
+/// A switchable git profile row: radio indicator (active/switching) + name + email.
+/// Modeled on IdentitySwitchRow but without the trailing agent-load control.
+private struct GitProfileRow: View {
+    let profile: GitProfile
+    let isActive: Bool
+    let isSwitching: Bool
+    let disabled: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.sm) {
+                leadingIndicator
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text(profile.displayName)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(profile.email)
+                        .font(.caption2)
+                        .monospaced()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: Spacing.xs)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled || isActive)
+        .padding(.horizontal, Spacing.xs + 2)
+        .padding(.vertical, Spacing.xs + 1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                .fill(rowFill)
+        )
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
+        }
+    }
+
+    @ViewBuilder
+    private var leadingIndicator: some View {
+        if isSwitching {
+            ProgressView().controlSize(.small).frame(width: 16)
+        } else if isActive {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(StatusColor.active)
+                .frame(width: 16)
+        } else {
+            Image(systemName: "circle")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary.opacity(0.5))
+                .frame(width: 16)
+        }
+    }
+
+    private var rowFill: Color {
+        if isActive { return StatusColor.active.opacity(0.10) }
+        if isHovering && !disabled { return Color.primary.opacity(0.06) }
+        return .clear
     }
 }
 
