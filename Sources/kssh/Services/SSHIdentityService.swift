@@ -74,23 +74,61 @@ struct SSHIdentityService {
 
     // MARK: - Active identity
 
-    /// The identity currently active in `~/.ssh/config` (the first uncommented
-    /// IdentityFile across all Host blocks), matched against `identities`.
+    /// The identity currently active in `~/.ssh/config`, matched against `identities`.
     static func activeIdentity(among identities: [SSHIdentity]) -> SSHIdentity? {
         guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else { return nil }
-        for raw in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard !line.hasPrefix("#") else { continue }
-            guard let path = identityFilePath(in: line) else { continue }
+        return activeIdentity(among: identities, in: contents)
+    }
+
+    /// Pure, testable scope-aware resolver. Returns the uncommented `IdentityFile`
+    /// from the most specific scope: a match inside a specific `Host` block wins over
+    /// one from a `Host *` default or a global (pre-block) directive. Falls back to a
+    /// wildcard/global match when no specific block references a known identity.
+    static func activeIdentity(among identities: [SSHIdentity], in config: String) -> SSHIdentity? {
+        let newline = config.contains("\r\n") ? "\r\n" : "\n"
+        let lines = config.components(separatedBy: newline)
+        let ranges = blockRanges(in: lines)
+
+        func match(at i: Int) -> SSHIdentity? {
+            let stripped = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !stripped.hasPrefix("#"),
+                  let path = identityFilePath(in: stripped) else { return nil }
             let expanded = expand(path)
-            if let match = identities.first(where: { $0.privateKeyPath == expanded }) {
-                return match
+            return identities.first { $0.privateKeyPath == expanded }
+        }
+
+        // Global directives before the first Host/Match block apply to all hosts:
+        // treat them (and `Host *` blocks) as low-priority wildcard matches.
+        var wildcardMatch: SSHIdentity?
+        let firstStart = ranges.first?.lowerBound ?? lines.count
+        for i in 0..<firstStart where wildcardMatch == nil {
+            wildcardMatch = match(at: i)
+        }
+        for range in ranges {
+            let isWildcard = isWildcardHostBlock(lines[range.lowerBound])
+            for i in range {
+                guard let m = match(at: i) else { continue }
+                if isWildcard {
+                    if wildcardMatch == nil { wildcardMatch = m }
+                } else {
+                    return m   // specific host block wins immediately
+                }
             }
         }
-        return nil
+        return wildcardMatch
     }
 
     // MARK: - Activation
+
+    /// Outcome of an `activate` call, so callers can tell a persisted config switch
+    /// apart from one that only changed the running agent.
+    enum ActivationResult {
+        /// The key is referenced by at least one Host/Match block, so `~/.ssh/config`
+        /// reflects the switch.
+        case configUpdated
+        /// The key is not referenced anywhere in `~/.ssh/config`; only the agent changed.
+        case agentOnly
+    }
 
     enum ActivationError: LocalizedError {
         case configUnreadable
@@ -110,12 +148,39 @@ struct SSHIdentityService {
         }
     }
 
-    /// Switches to `identity` by (1) rewriting `~/.ssh/config` so it is the active
-    /// IdentityFile for every Host block, then (2) clearing and reloading the agent.
-    /// A timestamped backup of the config is written before any edit.
-    static func activate(_ identity: SSHIdentity) async throws {
+    /// Switches to `identity` by (1) rewriting `~/.ssh/config` and (2) clearing and
+    /// reloading the agent. The rewrite is conservative: within each Host/Match block
+    /// that already references the key it uncomments that `IdentityFile` and comments
+    /// the others; blocks that don't mention the key are left untouched and no new
+    /// lines are inserted. A backup of the config is written before any edit.
+    ///
+    /// Returns `.agentOnly` when the key isn't referenced anywhere in the config (so
+    /// only the agent changed), letting the caller surface that to the user.
+    @discardableResult
+    static func activate(_ identity: SSHIdentity) async throws -> ActivationResult {
+        let referenced = configReferences(identity.privateKeyPath, in: currentConfigText())
         try rewriteConfig(activating: identity)
         try await reloadAgent(with: identity)
+        return referenced ? .configUpdated : .agentOnly
+    }
+
+    /// Reads `~/.ssh/config`, returning "" when it's missing or unreadable. (An
+    /// unreadable-but-present file is reported separately by `rewriteConfig`.)
+    private static func currentConfigText() -> String {
+        (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
+    }
+
+    /// True when any Host/Match block references `target` (commented or not).
+    static func configReferences(_ target: String, in config: String) -> Bool {
+        let newline = config.contains("\r\n") ? "\r\n" : "\n"
+        let lines = config.components(separatedBy: newline)
+        for range in blockRanges(in: lines) {
+            for i in range {
+                guard let path = identityFilePath(in: uncomment(lines[i])) else { continue }
+                if expand(path) == target { return true }
+            }
+        }
+        return false
     }
 
     /// Additively loads a single key into the running agent via `ssh-add <path>`,
@@ -209,33 +274,20 @@ struct SSHIdentityService {
     /// No new lines are ever inserted; this only toggles comments on existing lines.
     static func transform(config: String, activating identity: SSHIdentity) -> String {
         let target = identity.privateKeyPath
-        let newline = "\n"
+        // Preserve the file's newline style so a rewrite round-trips byte-for-byte and
+        // values don't carry a stray trailing `\r` on CRLF configs.
+        let newline = config.contains("\r\n") ? "\r\n" : "\n"
         var lines = config.components(separatedBy: newline)
 
-        // Host block boundaries: a "Host …" line starts a block that runs to the next
-        // "Host …" line or EOF. (Lines before the first Host — e.g. Include — are global
-        // and never touched.)
-        var blockStarts: [Int] = []
-        for (i, raw) in lines.enumerated() {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.lowercased().hasPrefix("host ") || line.lowercased() == "host" {
-                blockStarts.append(i)
-            }
-        }
-        guard !blockStarts.isEmpty else { return config }
+        let ranges = blockRanges(in: lines)
+        guard !ranges.isEmpty else { return config }
 
-        for (idx, start) in blockStarts.enumerated() {
-            let end = (idx + 1 < blockStarts.count) ? blockStarts[idx + 1] : lines.count
-
+        for range in ranges {
             // Collect this block's IdentityFile lines and whether any references the target.
             var identityLineIndices: [Int] = []
             var referencesTarget = false
-            for i in start..<end {
-                let stripped = lines[i].trimmingCharacters(in: .whitespaces)
-                let uncommented = stripped.hasPrefix("#")
-                    ? String(stripped.dropFirst()).trimmingCharacters(in: .whitespaces)
-                    : stripped
-                guard let path = identityFilePath(in: uncommented) else { continue }
+            for i in range {
+                guard let path = identityFilePath(in: uncomment(lines[i])) else { continue }
                 identityLineIndices.append(i)
                 if expand(path) == target { referencesTarget = true }
             }
@@ -244,11 +296,8 @@ struct SSHIdentityService {
             guard referencesTarget else { continue }
 
             for i in identityLineIndices {
-                let stripped = lines[i].trimmingCharacters(in: .whitespaces)
-                let uncommented = stripped.hasPrefix("#")
-                    ? String(stripped.dropFirst()).trimmingCharacters(in: .whitespaces)
-                    : stripped
-                guard let path = identityFilePath(in: uncommented) else { continue }
+                let stripped = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let path = identityFilePath(in: uncomment(lines[i])) else { continue }
                 let indent = leadingWhitespace(of: lines[i])
 
                 if expand(path) == target {
@@ -260,6 +309,41 @@ struct SSHIdentityService {
         }
 
         return lines.joined(separator: newline)
+    }
+
+    /// Host/Match block ranges over `lines`. A `Host …` or `Match …` line starts a block
+    /// that runs to the next such line or EOF. Lines before the first block (e.g. global
+    /// Include directives) are not part of any range and are never rewritten.
+    private static func blockRanges(in lines: [String]) -> [Range<Int>] {
+        var starts: [Int] = []
+        for (i, raw) in lines.enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if line.hasPrefix("host ") || line == "host"
+                || line.hasPrefix("match ") || line == "match" {
+                starts.append(i)
+            }
+        }
+        return starts.enumerated().map { idx, start in
+            let end = (idx + 1 < starts.count) ? starts[idx + 1] : lines.count
+            return start..<end
+        }
+    }
+
+    /// True for a `Host *` block (its only pattern is `*`). Such defaults are treated as
+    /// lower priority than a specific host when resolving the active identity.
+    private static func isWildcardHostBlock(_ line: String) -> Bool {
+        let lower = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard lower.hasPrefix("host") else { return false }
+        let patterns = lower.dropFirst("host".count).split { $0 == " " || $0 == "\t" }
+        return patterns == ["*"]
+    }
+
+    /// Strips a leading `#` comment marker (and surrounding space) from a config line.
+    private static func uncomment(_ line: String) -> String {
+        let stripped = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return stripped.hasPrefix("#")
+            ? String(stripped.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+            : stripped
     }
 
     // MARK: - Agent reload
@@ -277,14 +361,30 @@ struct SSHIdentityService {
 
     // MARK: - Parsing helpers
 
-    /// Returns the path argument of an `IdentityFile <path>` directive, or nil.
+    /// Returns the path argument of an `IdentityFile <path>` directive, or nil — parsed
+    /// the way OpenSSH reads it: keyword, an optional `=` separator, then a single
+    /// (optionally quoted) token. So `IdentityFile=~/.ssh/k`, `IdentityFile "~/.ssh/k"`,
+    /// and `IdentityFile ~/.ssh/k  # note` all yield `~/.ssh/k`. Tilde is left for `expand`.
     private static func identityFilePath(in line: String) -> String? {
-        let lower = line.lowercased()
-        guard lower.hasPrefix("identityfile") else { return nil }
-        let after = line.dropFirst("identityfile".count).trimmingCharacters(in: .whitespaces)
-        // Strip surrounding quotes ssh allows around paths.
-        let unquoted = after.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-        return unquoted.isEmpty ? nil : unquoted
+        guard line.lowercased().hasPrefix("identityfile") else { return nil }
+        var rest = line.dropFirst("identityfile".count)
+        // The keyword must be followed by a separator (whitespace or `=`), not more
+        // letters — otherwise this is a different keyword like `IdentityFileFoo`.
+        if let first = rest.first, first != " ", first != "\t", first != "=" { return nil }
+
+        rest = rest.drop { $0 == " " || $0 == "\t" }
+        if rest.first == "=" { rest = rest.dropFirst() }
+        rest = rest.drop { $0 == " " || $0 == "\t" }
+        guard let opener = rest.first else { return nil }
+
+        let token: Substring
+        if opener == "\"" || opener == "'" {
+            let body = rest.dropFirst()
+            token = body.firstIndex(of: opener).map { body[..<$0] } ?? body
+        } else {
+            token = rest.prefix { $0 != " " && $0 != "\t" && $0 != "\r" && $0 != "\n" }
+        }
+        return token.isEmpty ? nil : String(token)
     }
 
     private static func leadingWhitespace(of line: String) -> String {

@@ -23,6 +23,20 @@ final class SSHServiceTests: XCTestCase {
         let keys = await SSHService.loadedKeys()
         XCTAssertNotNil(keys)
     }
+
+    func testParseAgentSocket() {
+        let output = """
+        SSH_AUTH_SOCK=/var/folders/xx/agent.12345; export SSH_AUTH_SOCK;
+        SSH_AGENT_PID=12346; export SSH_AGENT_PID;
+        echo Agent pid 12346;
+        """
+        XCTAssertEqual(SSHService.parseAgentSocket(from: output), "/var/folders/xx/agent.12345")
+    }
+
+    func testParseAgentSocketMissing() {
+        XCTAssertNil(SSHService.parseAgentSocket(from: "echo no agent here;"))
+        XCTAssertNil(SSHService.parseAgentSocket(from: ""))
+    }
 }
 
 final class GitIdentityTests: XCTestCase {
@@ -129,6 +143,93 @@ final class SSHIdentityTransformTests: XCTestCase {
         let result = SSHIdentityService.transform(config: config, activating: identity("aliaksandrrutkouski"))
         // The two-space indent of the original IdentityFile lines is kept.
         XCTAssertTrue(result.contains("\n  IdentityFile ~/.ssh/aliaksandrrutkouski"))
+    }
+
+    func testCRLFConfigTogglesAndStaysCRLF() {
+        let cfg = "Host github.com\r\n  IdentityFile ~/.ssh/id_ed25519\r\n  #IdentityFile ~/.ssh/aliaksandrrutkouski"
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("\r\n"))                                        // round-trips CRLF
+        XCTAssertTrue(result.contains("\r\n  IdentityFile ~/.ssh/aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("\r\n  #IdentityFile ~/.ssh/id_ed25519"))
+    }
+
+    func testEqualsSeparatorIsMatched() {
+        let cfg = "Host x\n  IdentityFile=~/.ssh/id_ed25519\n  #IdentityFile=~/.ssh/aliaksandrrutkouski"
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/id_ed25519"))
+    }
+
+    func testInlineTrailingTokenIgnored() {
+        let cfg = "Host x\n  IdentityFile ~/.ssh/id_ed25519  # main\n  #IdentityFile ~/.ssh/aliaksandrrutkouski"
+        XCTAssertTrue(SSHIdentityService.configReferences(path("id_ed25519"), in: cfg))
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/id_ed25519"))
+    }
+
+    func testQuotedPathMatched() {
+        let cfg = "Host x\n  IdentityFile \"~/.ssh/id_ed25519\"\n  #IdentityFile ~/.ssh/aliaksandrrutkouski"
+        XCTAssertTrue(SSHIdentityService.configReferences(path("id_ed25519"), in: cfg))
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/id_ed25519"))
+    }
+
+    func testMatchBlockScopedSeparately() {
+        // The Match block references the target; the preceding Host block does not and
+        // must be left fully untouched (its id_ed25519 stays active, not commented).
+        let cfg = """
+        Host github.com
+          IdentityFile ~/.ssh/id_ed25519
+
+        Match host gitlab.com
+          IdentityFile ~/.ssh/aliaksandrrutkouski
+        """
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("Host github.com\n  IdentityFile ~/.ssh/id_ed25519"))
+        XCTAssertFalse(result.contains("#IdentityFile ~/.ssh/id_ed25519"))
+    }
+
+    func testConfigReferences() {
+        let cfg = "Host x\n  #IdentityFile ~/.ssh/aliaksandrrutkouski"
+        XCTAssertTrue(SSHIdentityService.configReferences(path("aliaksandrrutkouski"), in: cfg))
+        XCTAssertFalse(SSHIdentityService.configReferences(path("id_ed25519"), in: cfg))
+    }
+
+    private func path(_ name: String) -> String {
+        (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/\(name)")
+    }
+}
+
+final class ActiveIdentityTests: XCTestCase {
+    private func identity(_ name: String) -> SSHIdentity {
+        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/\(name)")
+        return SSHIdentity(privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "x")
+    }
+
+    func testPrefersSpecificHostOverWildcard() {
+        let cfg = """
+        Host *
+          IdentityFile ~/.ssh/id_ed25519
+
+        Host github.com
+          IdentityFile ~/.ssh/aliaksandrrutkouski
+        """
+        let ids = [identity("id_ed25519"), identity("aliaksandrrutkouski")]
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "aliaksandrrutkouski")
+    }
+
+    func testWildcardUsedWhenNoSpecificMatch() {
+        let cfg = "Host *\n  IdentityFile ~/.ssh/id_ed25519"
+        let ids = [identity("id_ed25519"), identity("aliaksandrrutkouski")]
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "id_ed25519")
+    }
+
+    func testGlobalPreBlockDirectiveIsFallback() {
+        let cfg = "IdentityFile ~/.ssh/id_ed25519\n\nHost github.com\n  User git"
+        let ids = [identity("id_ed25519")]
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "id_ed25519")
     }
 }
 
@@ -321,6 +422,14 @@ final class SettingsStoreProfileTests: XCTestCase {
     func testLoadProfilesEmptyOnMissing() {
         let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
         XCTAssertEqual(SettingsStore.loadProfiles(from: defaults), [])
+    }
+
+    func testProfileCapAllowsUpToMax() {
+        XCTAssertEqual(SettingsStore.maxProfiles, 5)
+        XCTAssertTrue(SettingsStore.canAdd(profileCount: 0))
+        XCTAssertTrue(SettingsStore.canAdd(profileCount: SettingsStore.maxProfiles - 1))
+        XCTAssertFalse(SettingsStore.canAdd(profileCount: SettingsStore.maxProfiles))
+        XCTAssertFalse(SettingsStore.canAdd(profileCount: SettingsStore.maxProfiles + 1))
     }
 
     func testLoadProfilesEmptyOnGarbage() {

@@ -20,6 +20,15 @@ final class SettingsStore: ObservableObject {
 
     private static let gitProfilesKey = "gitProfiles"
 
+    /// Upper bound on stored git profiles, enforced by `addProfile` and surfaced in the UI.
+    static let maxProfiles = 5
+
+    /// Pure, testable cap check: whether another profile may be added given a count.
+    static func canAdd(profileCount: Int) -> Bool { profileCount < maxProfiles }
+
+    /// Whether the user may add another profile (under `maxProfiles`).
+    var canAddProfile: Bool { Self.canAdd(profileCount: gitProfiles.count) }
+
     init() {
         self.githubPat = KeychainManager.read(key: "githubPat") ?? ""
         self.gitlabPat = KeychainManager.read(key: "gitlabPat") ?? ""
@@ -34,6 +43,7 @@ final class SettingsStore: ObservableObject {
     // MARK: - Git profile CRUD
 
     func addProfile(_ profile: GitProfile) {
+        guard canAddProfile else { return }
         gitProfiles.append(profile)
     }
 

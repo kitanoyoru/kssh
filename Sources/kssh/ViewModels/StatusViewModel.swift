@@ -12,6 +12,9 @@ final class StatusViewModel: ObservableObject {
     @Published var agentRunning = false
     @Published var agentSocket: String?
     @Published var error: String?
+    /// Non-error, informational message (e.g. a switch that only changed the agent
+    /// because the key isn't referenced in ~/.ssh/config). Shown in a neutral banner.
+    @Published var notice: String?
 
     /// Keypairs discovered on disk under ~/.ssh, and which one is currently active.
     @Published var availableIdentities: [SSHIdentity] = []
@@ -28,6 +31,9 @@ final class StatusViewModel: ObservableObject {
 
     /// Git profile (work/study) currently being applied.
     @Published var switchingProfile: String?
+
+    /// True while an ssh-agent is being started (Enable button busy state).
+    @Published var startingAgent = false
 
     /// Shared so the menu and the Manage-profiles window observe the same instance.
     let store = SettingsStore()
@@ -114,10 +120,9 @@ final class StatusViewModel: ObservableObject {
         availableIdentities = identities
         activeIdentity = SSHIdentityService.activeIdentity(among: identities)
 
-        guard running else {
-            error = "SSH agent not running. Start it with: eval \"$(ssh-agent -s)\""
-            return []
-        }
+        // When the agent is off, the UI shows a dedicated "Agent off" section with an
+        // Enable button instead of the normal sections, so no error banner is needed here.
+        guard running else { return [] }
 
         return await SSHService.loadedKeys()
     }
@@ -128,12 +133,31 @@ final class StatusViewModel: ObservableObject {
         guard switchingIdentity == nil else { return }
         switchingIdentity = identity.id
         error = nil
+        notice = nil
         defer { switchingIdentity = nil }
 
         do {
-            try await SSHIdentityService.activate(identity)
+            let result = try await SSHIdentityService.activate(identity)
+            if result == .agentOnly {
+                notice = "Switched in the agent only — \(identity.displayName) isn't referenced in ~/.ssh/config, so the file was left unchanged."
+            }
         } catch {
             self.error = error.localizedDescription
+            return
+        }
+        await refresh()
+    }
+
+    /// Starts a fresh ssh-agent and refreshes so the normal sections appear. Surfaces a
+    /// failure via `error`.
+    func startAgent() async {
+        guard !startingAgent else { return }
+        startingAgent = true
+        error = nil
+        defer { startingAgent = false }
+
+        guard await SSHService.startAgent() else {
+            error = "Could not start the SSH agent."
             return
         }
         await refresh()

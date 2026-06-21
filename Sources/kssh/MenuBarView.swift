@@ -83,8 +83,21 @@ struct MenuBarView: View {
                     .padding(.top, Spacing.sm)
             }
 
+            if let notice = viewModel.notice {
+                NoticeBanner(message: notice) { viewModel.notice = nil }
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.top, Spacing.sm)
+            }
+
             if viewModel.isLoading && viewModel.sshKeys.isEmpty {
                 loadingView
+            } else if !viewModel.agentRunning {
+                // Agent off: hide every section and offer a single Enable action.
+                VStack(spacing: Spacing.sm) {
+                    agentOffSection
+                }
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, Spacing.md)
             } else {
                 VStack(spacing: Spacing.sm) {
                     keysSection
@@ -161,10 +174,18 @@ struct MenuBarView: View {
                     )
                 }
             }
-            Button { withAnimation { route = .profileForm(editing: nil) } } label: {
-                actionLabelRow("Add profile", systemImage: "plus.circle")
+            if store.canAddProfile {
+                Button { withAnimation { route = .profileForm(editing: nil) } } label: {
+                    actionLabelRow("Add profile", systemImage: "plus.circle")
+                }
+                .buttonStyle(MenuActionButtonStyle())
+            } else {
+                Text("Maximum of \(SettingsStore.maxProfiles) profiles reached.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, Spacing.xxs)
             }
-            .buttonStyle(MenuActionButtonStyle())
         }
     }
 
@@ -213,6 +234,38 @@ struct MenuBarView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, Spacing.lg + Spacing.sm)
+    }
+
+    // MARK: - Agent off
+
+    /// Shown in place of every section when the ssh-agent isn't running: a status pill plus
+    /// a single Enable button that starts the agent.
+    private var agentOffSection: some View {
+        SectionCard(
+            icon: "powerplug",
+            title: "SSH Agent",
+            accessory: { StatusPill(text: "Agent off", color: StatusColor.inactive) }
+        ) {
+            Text("The SSH agent isn't running. Enable it to manage and load your keys.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button { Task { await viewModel.startAgent() } } label: {
+                if viewModel.startingAgent {
+                    HStack(spacing: Spacing.xs) {
+                        ProgressView().controlSize(.small)
+                        Text("Enabling…")
+                    }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    actionLabelRow("Enable agent", systemImage: "power")
+                }
+            }
+            .buttonStyle(MenuActionButtonStyle())
+            .disabled(viewModel.startingAgent)
+        }
     }
 
     // MARK: - Keys (SSH identities + agent state, merged)
@@ -304,15 +357,13 @@ struct MenuBarView: View {
 
             if !store.gitProfiles.isEmpty {
                 Divider().padding(.vertical, Spacing.xxs)
-                ForEach(store.gitProfiles) { profile in
-                    GitProfileRow(
-                        profile: profile,
-                        isActive: profile.id == viewModel.activeProfile?.id,
-                        isSwitching: profile.id == viewModel.switchingProfile,
-                        disabled: viewModel.switchingProfile != nil
-                    ) {
-                        Task { await viewModel.switchGitProfile(profile) }
-                    }
+                ProfileTabs(
+                    profiles: store.gitProfiles,
+                    activeId: viewModel.activeProfile?.id,
+                    switchingId: viewModel.switchingProfile,
+                    disabled: viewModel.switchingProfile != nil
+                ) { profile in
+                    Task { await viewModel.switchGitProfile(profile) }
                 }
             }
             manageProfilesButton
@@ -738,6 +789,43 @@ private struct ErrorBanner: View {
     }
 }
 
+/// A dismissible inline notice for informational (non-error) messages, e.g. a switch
+/// that only updated the agent. Neutral accent styling distinguishes it from `ErrorBanner`.
+private struct NoticeBanner: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Spacing.sm) {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss notice")
+        }
+        .padding(Spacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(Color.accentColor.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
+        )
+    }
+}
+
 /// A selectable identity row in the switcher. The radio/check (and tap) switches the
 /// *active config* identity; a separate trailing control loads the key into the agent.
 /// These are two orthogonal states: active-in-config vs loaded-in-agent.
@@ -798,6 +886,10 @@ private struct IdentitySwitchRow: View {
             RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
                 .fill(rowFill)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                .strokeBorder(StatusColor.active.opacity(isActive ? 0.4 : 0), lineWidth: 1)
+        )
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
         }
@@ -853,7 +945,7 @@ private struct IdentitySwitchRow: View {
     }
 
     private var rowFill: Color {
-        if isActive { return StatusColor.active.opacity(0.10) }
+        if isActive { return StatusColor.active.opacity(0.16) }
         if isHovering && !disabled { return Color.primary.opacity(0.06) }
         return .clear
     }
@@ -924,9 +1016,34 @@ private struct RemoteRow: View {
     }
 }
 
-/// A switchable git profile row: radio indicator (active/switching) + name + email.
-/// Modeled on IdentitySwitchRow but without the trailing agent-load control.
-private struct GitProfileRow: View {
+/// Git profiles rendered as a wrapping strip of selectable "tab" chips. The active
+/// profile is highlighted; tapping another switches to it. Wraps to multiple lines so
+/// up to `SettingsStore.maxProfiles` profiles fit the narrow popover regardless of name length.
+private struct ProfileTabs: View {
+    let profiles: [GitProfile]
+    let activeId: String?
+    let switchingId: String?
+    let disabled: Bool
+    let onSelect: (GitProfile) -> Void
+
+    var body: some View {
+        FlowLayout(spacing: Spacing.xs) {
+            ForEach(profiles) { profile in
+                ProfileTab(
+                    profile: profile,
+                    isActive: profile.id == activeId,
+                    isSwitching: profile.id == switchingId,
+                    disabled: disabled
+                ) { onSelect(profile) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One profile chip in `ProfileTabs`: name + active/switching indicator, green-highlighted
+/// when active (matching the SSH key row's selected styling).
+private struct ProfileTab: View {
     let profile: GitProfile
     let isActive: Bool
     let isSwitching: Bool
@@ -937,60 +1054,82 @@ private struct GitProfileRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: Spacing.sm) {
-                leadingIndicator
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    Text(profile.displayName)
-                        .font(.callout)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text(profile.email)
-                        .font(.caption2)
-                        .monospaced()
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            HStack(spacing: Spacing.xxs + 1) {
+                if isSwitching {
+                    ProgressView().controlSize(.small)
+                } else if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(StatusColor.active)
                 }
-                Spacer(minLength: Spacing.xs)
+                Text(profile.displayName)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(isActive ? .primary : .secondary)
             }
-            .contentShape(Rectangle())
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(disabled || isActive)
-        .padding(.horizontal, Spacing.xs + 2)
-        .padding(.vertical, Spacing.xs + 1)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                .fill(rowFill)
-        )
+        .background(Capsule().fill(fill))
+        .overlay(Capsule().strokeBorder(StatusColor.active.opacity(isActive ? 0.4 : 0), lineWidth: 1))
+        .help(profile.email)
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
         }
     }
 
-    @ViewBuilder
-    private var leadingIndicator: some View {
-        if isSwitching {
-            ProgressView().controlSize(.small).frame(width: 16)
-        } else if isActive {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(StatusColor.active)
-                .frame(width: 16)
-        } else {
-            Image(systemName: "circle")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary.opacity(0.5))
-                .frame(width: 16)
+    private var fill: Color {
+        if isActive { return StatusColor.active.opacity(0.16) }
+        if isHovering && !disabled { return Color.primary.opacity(0.08) }
+        return Color.primary.opacity(0.04)
+    }
+}
+
+/// Minimal left-to-right wrapping layout for chips/tabs (macOS 13+ `Layout`).
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                totalHeight += rowHeight + spacing
+                totalWidth = max(totalWidth, x - spacing)
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
+        totalHeight += rowHeight
+        totalWidth = max(totalWidth, x - spacing)
+        return CGSize(width: min(totalWidth, maxWidth), height: totalHeight)
     }
 
-    private var rowFill: Color {
-        if isActive { return StatusColor.active.opacity(0.10) }
-        if isHovering && !disabled { return Color.primary.opacity(0.06) }
-        return .clear
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 

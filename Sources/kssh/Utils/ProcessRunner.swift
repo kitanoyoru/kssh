@@ -38,6 +38,18 @@ enum ProcessRunner {
         return env
     }()
 
+    /// Overrides `SSH_AUTH_SOCK` for every subsequent child process. Set after starting a
+    /// fresh agent (see `SSHService.startAgent`), whose socket isn't known when
+    /// `resolvedEnvironment` is first computed. `nil` means "use the resolved base".
+    private static var agentSocketOverride: String?
+
+    /// Point future child processes at `socket` (a newly started agent). Also mirrors it
+    /// into the process environment so `SSHService.agentPid` reflects it.
+    static func useAgentSocket(_ socket: String) {
+        agentSocketOverride = socket
+        setenv("SSH_AUTH_SOCK", socket, 1)
+    }
+
     /// Reads a variable from the launchd user domain (where the GUI session keeps
     /// `SSH_AUTH_SOCK`). Returns nil if unset or empty.
     private static func launchctlGetenv(_ name: String) -> String? {
@@ -91,6 +103,7 @@ enum ProcessRunner {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = [command] + arguments
             var env = resolvedEnvironment
+            if let socket = agentSocketOverride { env["SSH_AUTH_SOCK"] = socket }
             for (key, value) in environment { env[key] = value }
             process.environment = env
 

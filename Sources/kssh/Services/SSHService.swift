@@ -59,4 +59,29 @@ struct SSHService {
         }
         return sshAuthSock
     }
+
+    /// Starts a fresh ssh-agent via `ssh-agent -s` and points subsequent child processes at
+    /// its socket. Returns true when an agent started and its socket was captured.
+    @discardableResult
+    static func startAgent() async -> Bool {
+        guard let result = await ProcessRunner.run("ssh-agent", arguments: ["-s"]),
+              result.exitCode == 0,
+              let socket = parseAgentSocket(from: result.output) else {
+            return false
+        }
+        ProcessRunner.useAgentSocket(socket)
+        return true
+    }
+
+    /// Extracts the `SSH_AUTH_SOCK` value from `ssh-agent -s` output (Bourne-shell form:
+    /// `SSH_AUTH_SOCK=/path/agent.123; export SSH_AUTH_SOCK; …`). Pure and testable.
+    static func parseAgentSocket(from output: String) -> String? {
+        for segment in output.components(separatedBy: ";") {
+            let token = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard token.hasPrefix("SSH_AUTH_SOCK=") else { continue }
+            let value = String(token.dropFirst("SSH_AUTH_SOCK=".count))
+            return value.isEmpty ? nil : value
+        }
+        return nil
+    }
 }
