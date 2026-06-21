@@ -17,6 +17,14 @@ final class StatusViewModel: ObservableObject {
     @Published var availableIdentities: [SSHIdentity] = []
     @Published var activeIdentity: SSHIdentity?
     @Published var switchingIdentity: String?
+    /// Identity currently being loaded into the agent — separate from `switchingIdentity`
+    /// so loading and switching don't lock each other out.
+    @Published var loadingIdentity: String?
+
+    /// GPG availability and key-creation state.
+    @Published var gpgAvailable = false
+    @Published var creatingGPGKey = false
+    @Published var gpgCreateError: String?
 
     private let store = SettingsStore()
     private var refreshTask: Task<Void, Never>?
@@ -45,12 +53,14 @@ final class StatusViewModel: ObservableObject {
         async let sshResult = loadSSH()
         async let gitResult = loadGit()
         async let gpgResult = loadGPG()
+        async let gpgAvailableResult = GPGService.isAvailable()
 
-        let (keys, git, gpg) = await (sshResult, gitResult, gpgResult)
+        let (keys, git, gpg, gpgAvail) = await (sshResult, gitResult, gpgResult, gpgAvailableResult)
 
         sshKeys = keys
         gitIdentity = git
         gpgIdentity = gpg
+        gpgAvailable = gpgAvail
 
         if !keys.isEmpty {
             async let githubResult = GitHubService.user(forKeys: keys, pat: store.githubPat)
@@ -101,6 +111,47 @@ final class StatusViewModel: ObservableObject {
             return
         }
         await refresh()
+    }
+
+    /// True when this on-disk identity is currently loaded in the agent. Both
+    /// ssh-keygen and ssh-add report the same `SHA256:…` fingerprint, so a direct
+    /// comparison is reliable.
+    func isLoaded(_ identity: SSHIdentity) -> Bool {
+        sshKeys.contains { $0.fingerprint == identity.fingerprint }
+    }
+
+    /// Loads a single key into the agent (ssh-add) without rewriting ~/.ssh/config,
+    /// then refreshes so the loaded-keys list reflects it.
+    func loadIdentityIntoAgent(_ identity: SSHIdentity) async {
+        guard loadingIdentity == nil else { return }
+        loadingIdentity = identity.id
+        error = nil
+        defer { loadingIdentity = nil }
+
+        do {
+            try await SSHIdentityService.loadIntoAgent(identity)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+        await refresh()
+    }
+
+    /// Creates a new GPG key and refreshes to pick it up. Returns true on success.
+    func createGPGKey(name: String, email: String, passphrase: String) async -> Bool {
+        guard !creatingGPGKey else { return false }
+        creatingGPGKey = true
+        gpgCreateError = nil
+        defer { creatingGPGKey = false }
+
+        do {
+            _ = try await GPGService.createKey(name: name, email: email, passphrase: passphrase)
+        } catch {
+            gpgCreateError = error.localizedDescription
+            return false
+        }
+        await refresh()
+        return true
     }
 
     private func loadGit() async -> GitIdentity? {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var viewModel: StatusViewModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -130,7 +131,10 @@ struct MenuBarView: View {
                         identity: identity,
                         isActive: identity.id == viewModel.activeIdentity?.id,
                         isSwitching: identity.id == viewModel.switchingIdentity,
-                        disabled: viewModel.switchingIdentity != nil
+                        disabled: viewModel.switchingIdentity != nil,
+                        isLoaded: viewModel.isLoaded(identity),
+                        isLoading: identity.id == viewModel.loadingIdentity,
+                        onLoad: { Task { await viewModel.loadIdentityIntoAgent(identity) } }
                     ) {
                         Task { await viewModel.switchIdentity(identity) }
                     }
@@ -189,10 +193,35 @@ struct MenuBarView: View {
                         )
                     }
                 }
+                createGPGKeyButton
+            } else if !viewModel.gpgAvailable {
+                EmptyRow(text: "GPG not installed")
+                Text("Install with: brew install gnupg")
+                    .font(.caption2)
+                    .monospaced()
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                EmptyRow(text: viewModel.gpgIdentity == nil ? "GPG not available" : "No secret keys")
+                EmptyRow(text: "No secret keys")
+                createGPGKeyButton
             }
         }
+    }
+
+    private var createGPGKeyButton: some View {
+        Button(action: { openWindow(id: "create-gpg-key") }) {
+            HStack(spacing: Spacing.xs + 1) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Create GPG key…")
+                    .font(.caption)
+                Spacer()
+            }
+            .foregroundStyle(.tint)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, Spacing.xxs)
     }
 
     // MARK: - Remote
@@ -344,55 +373,65 @@ private struct IdentityRow: View {
     }
 }
 
-/// A selectable identity row in the switcher. Shows a check for the active key,
-/// a spinner while activating, and switches on tap.
+/// A selectable identity row in the switcher. The radio/check (and tap) switches the
+/// *active config* identity; a separate trailing control loads the key into the agent.
+/// These are two orthogonal states: active-in-config vs loaded-in-agent.
 private struct IdentitySwitchRow: View {
     let identity: SSHIdentity
     let isActive: Bool
     let isSwitching: Bool
     let disabled: Bool
+    let isLoaded: Bool
+    let isLoading: Bool
+    let onLoad: () -> Void
     let action: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: Spacing.sm) {
-                leadingIndicator
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    Text(identity.displayName)
-                        .font(.callout)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    HStack(spacing: Spacing.xs + 1) {
-                        Text(identity.keyType.uppercased())
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.secondary.opacity(0.12)))
-                        Text(identity.name)
-                            .font(.caption2)
-                            .monospaced()
-                            .foregroundStyle(.secondary)
+        HStack(spacing: Spacing.xs) {
+            // Primary switch — wraps only the indicator + labels so the trailing
+            // load control stays independently tappable (no button-in-button).
+            Button(action: action) {
+                HStack(spacing: Spacing.sm) {
+                    leadingIndicator
+                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                        Text(identity.displayName)
+                            .font(.callout)
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
-                            .truncationMode(.middle)
+                            .truncationMode(.tail)
+                        HStack(spacing: Spacing.xs + 1) {
+                            Text(identity.keyType.uppercased())
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                            Text(identity.name)
+                                .font(.caption2)
+                                .monospaced()
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
+                    Spacer(minLength: Spacing.xs)
                 }
-                Spacer(minLength: Spacing.xs)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, Spacing.xs + 2)
-            .padding(.vertical, Spacing.xs + 1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                    .fill(rowFill)
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(disabled || isActive)
+
+            trailingLoadControl
         }
-        .buttonStyle(.plain)
-        .disabled(disabled || isActive)
+        .padding(.horizontal, Spacing.xs + 2)
+        .padding(.vertical, Spacing.xs + 1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                .fill(rowFill)
+        )
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
         }
@@ -412,6 +451,30 @@ private struct IdentitySwitchRow: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary.opacity(0.5))
                 .frame(width: 16)
+        }
+    }
+
+    /// Loaded-in-agent state: spinner while loading, a bolt when loaded, otherwise a
+    /// load button (ssh-add) that does NOT change the active config identity.
+    @ViewBuilder
+    private var trailingLoadControl: some View {
+        if isLoading {
+            ProgressView().controlSize(.small).frame(width: 18)
+        } else if isLoaded {
+            Image(systemName: "bolt.horizontal.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(StatusColor.active)
+                .frame(width: 18)
+                .help("Loaded in agent")
+        } else {
+            Button(action: onLoad) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 18)
+            .help("Load this key into the agent (ssh-add)")
         }
     }
 

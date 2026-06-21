@@ -96,12 +96,14 @@ struct SSHIdentityService {
         case configUnreadable
         case configUnwritable
         case agentReloadFailed(String)
+        case agentLoadFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .configUnreadable: return "Could not read ~/.ssh/config"
             case .configUnwritable: return "Could not write ~/.ssh/config"
             case .agentReloadFailed(let msg): return "Agent reload failed: \(msg)"
+            case .agentLoadFailed(let msg): return "Could not load key into agent: \(msg)"
             }
         }
     }
@@ -112,6 +114,31 @@ struct SSHIdentityService {
     static func activate(_ identity: SSHIdentity) async throws {
         try rewriteConfig(activating: identity)
         try await reloadAgent(with: identity)
+    }
+
+    /// Additively loads a single key into the running agent via `ssh-add <path>`,
+    /// WITHOUT touching `~/.ssh/config` and WITHOUT clearing other loaded keys.
+    /// Runs non-interactively so a passphrase-protected key fails fast instead of
+    /// hanging the subprocess waiting on a TTY/askpass prompt.
+    static func loadIntoAgent(_ identity: SSHIdentity) async throws {
+        let nonInteractive = [
+            "SSH_ASKPASS_REQUIRE": "never",
+            "SSH_ASKPASS": "/usr/bin/false",
+            "DISPLAY": ""
+        ]
+        guard let add = await ProcessRunner.run(
+            "ssh-add",
+            arguments: [identity.privateKeyPath],
+            timeout: 10,
+            environment: nonInteractive
+        ) else {
+            throw ActivationError.agentLoadFailed("ssh-add did not run")
+        }
+        if add.exitCode != 0 {
+            throw ActivationError.agentLoadFailed(
+                add.output.isEmpty ? "exit \(add.exitCode) (key may be passphrase-protected)" : add.output
+            )
+        }
     }
 
     // MARK: - Config rewrite

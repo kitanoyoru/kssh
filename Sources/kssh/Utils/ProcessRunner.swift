@@ -82,12 +82,17 @@ enum ProcessRunner {
         }
     }
 
-    static func run(_ command: String, arguments: [String] = [], timeout: TimeInterval = 5) async -> Result? {
+    /// Runs `command` with `arguments`. `environment` is an optional per-call overlay
+    /// merged over the resolved base environment — used to pass non-interactive flags
+    /// (e.g. SSH_ASKPASS_REQUIRE) or longer-lived settings without mutating the shared base.
+    static func run(_ command: String, arguments: [String] = [], timeout: TimeInterval = 5, environment: [String: String] = [:]) async -> Result? {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = [command] + arguments
-            process.environment = resolvedEnvironment
+            var env = resolvedEnvironment
+            for (key, value) in environment { env[key] = value }
+            process.environment = env
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()

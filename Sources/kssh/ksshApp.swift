@@ -20,5 +20,10 @@ struct ksshApp: App {
         Settings {
             SettingsView()
         }
+
+        Window("Create GPG Key", id: "create-gpg-key") {
+            CreateGPGKeyView(viewModel: viewModel)
+        }
+        .windowResizability(.contentSize)
     }
 }

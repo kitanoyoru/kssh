@@ -97,6 +97,53 @@ final class SSHIdentityTransformTests: XCTestCase {
     }
 }
 
+final class GPGKeygenArgumentTests: XCTestCase {
+    func testBuildsQuickGenerateArgs() {
+        let args = GPGService.gpgKeygenArguments(name: "Ada", email: "ada@x.io", passphrase: "")
+        XCTAssertEqual(args, [
+            "--batch", "--pinentry-mode", "loopback",
+            "--passphrase", "",
+            "--quick-generate-key", "Ada <ada@x.io>",
+            "ed25519", "cert,sign", "0"
+        ])
+    }
+
+    func testExpiryFormatting() {
+        let noExpiry = GPGService.gpgKeygenArguments(name: "A", email: "a@b.c", passphrase: "", expiryYears: 0)
+        XCTAssertEqual(noExpiry.last, "0")
+        let twoYears = GPGService.gpgKeygenArguments(name: "A", email: "a@b.c", passphrase: "", expiryYears: 2)
+        XCTAssertEqual(twoYears.last, "2y")
+    }
+
+    func testUserIdComposition() {
+        let args = GPGService.gpgKeygenArguments(name: "Grace Hopper", email: "grace@navy.mil", passphrase: "x")
+        XCTAssertTrue(args.contains("Grace Hopper <grace@navy.mil>"))
+    }
+
+    func testPassphrasePassedThrough() {
+        let args = GPGService.gpgKeygenArguments(name: "A", email: "a@b.c", passphrase: "s3cret")
+        let idx = args.firstIndex(of: "--passphrase")!
+        XCTAssertEqual(args[idx + 1], "s3cret")
+    }
+
+    func testNotInstalledErrorMentionsBrew() {
+        let desc = GPGService.GPGServiceError.notInstalled.errorDescription ?? ""
+        XCTAssertTrue(desc.contains("brew install gnupg"))
+    }
+}
+
+@MainActor
+final class StatusViewModelLoadedTests: XCTestCase {
+    func testIsLoadedMatchesFingerprint() {
+        let vm = StatusViewModel()
+        vm.sshKeys = [SSHKey(keyType: "ED25519", fingerprint: "SHA256:abc", comment: "", publicKey: "")]
+        let match = SSHIdentity(privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "SHA256:abc")
+        let other = SSHIdentity(privateKeyPath: "/k2", publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "SHA256:zzz")
+        XCTAssertTrue(vm.isLoaded(match))
+        XCTAssertFalse(vm.isLoaded(other))
+    }
+}
+
 final class RemoteUserTests: XCTestCase {
     func testDisplayName() {
         let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1)
