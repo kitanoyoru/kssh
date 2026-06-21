@@ -29,6 +29,11 @@ final class StatusViewModel: ObservableObject {
     private let store = SettingsStore()
     private var refreshTask: Task<Void, Never>?
 
+    /// Started from `MenuBarView.onAppear` and cancelled on `onDisappear`. Because
+    /// `MenuBarExtra(.window)` tears down the view when the popover closes, this loop is
+    /// intentionally bound to popover visibility: every open triggers an immediate
+    /// `refresh()`, and no background work (ssh-add/ssh-keygen/network) runs while closed.
+    /// The 60s loop only keeps data current during a long-open popover.
     func startAutoRefresh() {
         refreshTask = Task {
             await refresh()
@@ -135,6 +140,28 @@ final class StatusViewModel: ObservableObject {
             return
         }
         await refresh()
+    }
+
+    /// Unloads a single key from the agent (ssh-add -d) without rewriting config, then
+    /// refreshes. `ssh-add -d` exits non-zero when the key isn't loaded, so a failure is
+    /// only surfaced if the key is *still* loaded after refresh (a genuine failure) —
+    /// otherwise it was an out-of-band race and is treated as success.
+    func unloadIdentityFromAgent(_ identity: SSHIdentity) async {
+        guard loadingIdentity == nil else { return }
+        loadingIdentity = identity.id
+        error = nil
+        defer { loadingIdentity = nil }
+
+        var unloadError: String?
+        do {
+            try await SSHIdentityService.unloadFromAgent(identity)
+        } catch {
+            unloadError = error.localizedDescription
+        }
+        await refresh()
+        if let unloadError, isLoaded(identity) {
+            self.error = unloadError
+        }
     }
 
     /// Creates a new GPG key and refreshes to pick it up. Returns true on success.

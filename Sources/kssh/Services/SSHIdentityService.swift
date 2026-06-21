@@ -97,6 +97,7 @@ struct SSHIdentityService {
         case configUnwritable
         case agentReloadFailed(String)
         case agentLoadFailed(String)
+        case agentUnloadFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -104,6 +105,7 @@ struct SSHIdentityService {
             case .configUnwritable: return "Could not write ~/.ssh/config"
             case .agentReloadFailed(let msg): return "Agent reload failed: \(msg)"
             case .agentLoadFailed(let msg): return "Could not load key into agent: \(msg)"
+            case .agentUnloadFailed(let msg): return "Could not unload key from agent: \(msg)"
             }
         }
     }
@@ -139,6 +141,29 @@ struct SSHIdentityService {
                 add.output.isEmpty ? "exit \(add.exitCode) (key may be passphrase-protected)" : add.output
             )
         }
+    }
+
+    /// Removes a single key from the running agent via `ssh-add -d <path>`, WITHOUT
+    /// touching `~/.ssh/config`. Note: `ssh-add -d` exits non-zero when the key is not
+    /// currently loaded ("agent refused operation") — callers should treat that as benign.
+    static func unloadFromAgent(_ identity: SSHIdentity) async throws {
+        guard let del = await ProcessRunner.run(
+            "ssh-add",
+            arguments: unloadArguments(for: identity),
+            timeout: 10
+        ) else {
+            throw ActivationError.agentUnloadFailed("ssh-add did not run")
+        }
+        if del.exitCode != 0 {
+            throw ActivationError.agentUnloadFailed(
+                del.output.isEmpty ? "exit \(del.exitCode)" : del.output
+            )
+        }
+    }
+
+    /// Pure, testable argument builder for `ssh-add -d`.
+    static func unloadArguments(for identity: SSHIdentity) -> [String] {
+        ["-d", identity.privateKeyPath]
     }
 
     // MARK: - Config rewrite

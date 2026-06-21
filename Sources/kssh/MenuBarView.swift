@@ -11,21 +11,23 @@ struct MenuBarView: View {
             Divider()
                 .padding(.horizontal, Spacing.md)
 
+            if let error = viewModel.error {
+                ErrorBanner(message: error) { viewModel.error = nil }
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.top, Spacing.sm)
+            }
+
             if viewModel.isLoading && viewModel.sshKeys.isEmpty {
                 loadingView
             } else {
-                ScrollView {
-                    VStack(spacing: Spacing.sm) {
-                        sshSection
-                        identitySwitcherSection
-                        gitSection
-                        gpgSection
-                        remoteSection
-                    }
-                    .padding(.horizontal, Spacing.md)
-                    .padding(.vertical, Spacing.md)
+                VStack(spacing: Spacing.sm) {
+                    keysSection
+                    gitSection
+                    gpgSection
+                    remoteSection
                 }
-                .frame(maxHeight: 460)
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, Spacing.md)
             }
 
             Divider()
@@ -85,46 +87,23 @@ struct MenuBarView: View {
         .padding(.vertical, Spacing.lg + Spacing.sm)
     }
 
-    // MARK: - SSH
+    // MARK: - Keys (SSH identities + agent state, merged)
 
-    private var sshSection: some View {
+    /// One row per on-disk key. Each row carries both states: active-in-config
+    /// (check/radio + switch) and loaded-in-agent (bolt / load button), so the
+    /// separate "SSH Agent" card is no longer needed.
+    private var keysSection: some View {
         SectionCard(
             icon: "key.horizontal",
-            title: "SSH Agent",
+            title: "Keys",
             accessory: {
-                if viewModel.agentRunning && !viewModel.sshKeys.isEmpty {
-                    CountBadge(count: viewModel.sshKeys.count)
-                }
-            }
-        ) {
-            if viewModel.sshKeys.isEmpty {
-                EmptyRow(text: viewModel.agentRunning ? "No identities loaded" : "Agent not running")
-            } else {
-                ForEach(viewModel.sshKeys) { key in
-                    IdentityRow(
-                        title: key.comment.isEmpty ? key.keyType : key.comment,
-                        badge: key.keyType.uppercased(),
-                        detail: key.shortFingerprint
-                    )
-                }
-            }
-        }
-    }
-
-    // MARK: - Identity Switcher
-
-    private var identitySwitcherSection: some View {
-        SectionCard(
-            icon: "person.crop.circle",
-            title: "Identity",
-            accessory: {
-                if viewModel.availableIdentities.count > 1 {
+                if !viewModel.availableIdentities.isEmpty {
                     CountBadge(count: viewModel.availableIdentities.count)
                 }
             }
         ) {
             if viewModel.availableIdentities.isEmpty {
-                EmptyRow(text: "No keys found in ~/.ssh")
+                EmptyRow(text: viewModel.agentRunning ? "No keys found in ~/.ssh" : "Agent not running")
             } else {
                 ForEach(viewModel.availableIdentities) { identity in
                     IdentitySwitchRow(
@@ -134,13 +113,45 @@ struct MenuBarView: View {
                         disabled: viewModel.switchingIdentity != nil,
                         isLoaded: viewModel.isLoaded(identity),
                         isLoading: identity.id == viewModel.loadingIdentity,
-                        onLoad: { Task { await viewModel.loadIdentityIntoAgent(identity) } }
+                        onLoad: { Task { await viewModel.loadIdentityIntoAgent(identity) } },
+                        onUnload: { Task { await viewModel.unloadIdentityFromAgent(identity) } }
                     ) {
                         Task { await viewModel.switchIdentity(identity) }
                     }
+                    .contextMenu {
+                        Button { Clipboard.copy(identity.fingerprint) } label: {
+                            Label("Copy fingerprint", systemImage: "doc.on.doc")
+                        }
+                        if !identity.publicKeyPath.isEmpty {
+                            Button {
+                                if let pub = try? String(contentsOfFile: identity.publicKeyPath, encoding: .utf8) {
+                                    Clipboard.copy(pub.trimmingCharacters(in: .whitespacesAndNewlines))
+                                }
+                            } label: {
+                                Label("Copy public key", systemImage: "doc.on.doc")
+                            }
+                        }
+                    }
+                }
+                // Surface any agent keys that aren't on disk (loaded elsewhere),
+                // so merging away the SSH section doesn't hide them.
+                ForEach(orphanLoadedKeys) { key in
+                    IdentityRow(
+                        title: key.comment.isEmpty ? key.keyType : key.comment,
+                        badge: "AGENT",
+                        detail: key.shortFingerprint
+                    )
+                    .copyable(key.publicKey.isEmpty ? key.fingerprint : key.publicKey,
+                              label: key.publicKey.isEmpty ? "Copy fingerprint" : "Copy public key")
                 }
             }
         }
+    }
+
+    /// Loaded agent keys with no matching on-disk identity (by fingerprint).
+    private var orphanLoadedKeys: [SSHKey] {
+        let knownFingerprints = Set(viewModel.availableIdentities.map(\.fingerprint))
+        return viewModel.sshKeys.filter { !knownFingerprints.contains($0.fingerprint) }
     }
 
     // MARK: - Git
@@ -153,9 +164,11 @@ struct MenuBarView: View {
                 }
                 if let email = git.email {
                     KeyValueRow(label: "user.email", value: email)
+                        .copyable(email, label: "Copy email")
                 }
                 if let key = git.signingKey {
                     KeyValueRow(label: "signingkey", value: key, mono: true)
+                        .copyable(key, label: "Copy signing key")
                 }
             } else {
                 EmptyRow(text: "Not configured")
@@ -185,12 +198,14 @@ struct MenuBarView: View {
                         badge: "ACTIVE",
                         detail: String(signingKey.keyId.suffix(16))
                     )
+                    .copyable(signingKey.keyId, label: "Copy key id")
                 } else {
                     ForEach(gpg.secretKeys) { key in
                         IdentityRow(
                             title: key.userId,
                             detail: String(key.keyId.suffix(16))
                         )
+                        .copyable(key.keyId, label: "Copy key id")
                     }
                 }
                 createGPGKeyButton
@@ -373,6 +388,43 @@ private struct IdentityRow: View {
     }
 }
 
+/// A dismissible inline error shown below the header. Only rendered when an error
+/// exists, so it never affects the layout in the normal (no-error) case.
+private struct ErrorBanner: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Spacing.sm) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(StatusColor.destructive)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss error")
+        }
+        .padding(Spacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(StatusColor.destructive.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(StatusColor.destructive.opacity(0.25), lineWidth: 1)
+        )
+    }
+}
+
 /// A selectable identity row in the switcher. The radio/check (and tap) switches the
 /// *active config* identity; a separate trailing control loads the key into the agent.
 /// These are two orthogonal states: active-in-config vs loaded-in-agent.
@@ -384,6 +436,7 @@ private struct IdentitySwitchRow: View {
     let isLoaded: Bool
     let isLoading: Bool
     let onLoad: () -> Void
+    let onUnload: () -> Void
     let action: () -> Void
 
     @State private var isHovering = false
@@ -454,18 +507,24 @@ private struct IdentitySwitchRow: View {
         }
     }
 
-    /// Loaded-in-agent state: spinner while loading, a bolt when loaded, otherwise a
-    /// load button (ssh-add) that does NOT change the active config identity.
+    /// Loaded-in-agent state: spinner while busy; when loaded, a tappable bolt that
+    /// turns into an eject glyph on hover to signal it unloads (ssh-add -d); otherwise a
+    /// load button (ssh-add). None of these change the active config identity.
     @ViewBuilder
     private var trailingLoadControl: some View {
         if isLoading {
             ProgressView().controlSize(.small).frame(width: 18)
         } else if isLoaded {
-            Image(systemName: "bolt.horizontal.circle.fill")
-                .font(.system(size: 13))
-                .foregroundStyle(StatusColor.active)
-                .frame(width: 18)
-                .help("Loaded in agent")
+            Button(action: onUnload) {
+                Image(systemName: isHovering ? "eject.circle.fill" : "bolt.horizontal.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(isHovering ? StatusColor.warning : StatusColor.active)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 18)
+            .disabled(disabled)
+            .help("Loaded in agent — click to unload (ssh-add -d)")
+            .accessibilityLabel("Unload key from agent")
         } else {
             Button(action: onLoad) {
                 Image(systemName: "arrow.down.circle")
@@ -474,7 +533,9 @@ private struct IdentitySwitchRow: View {
             }
             .buttonStyle(.plain)
             .frame(width: 18)
+            .disabled(disabled)
             .help("Load this key into the agent (ssh-add)")
+            .accessibilityLabel("Load key into agent")
         }
     }
 

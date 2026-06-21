@@ -144,6 +144,41 @@ final class StatusViewModelLoadedTests: XCTestCase {
     }
 }
 
+final class SSHAddArgumentTests: XCTestCase {
+    private func identity(_ name: String) -> SSHIdentity {
+        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/\(name)")
+        return SSHIdentity(privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "x")
+    }
+
+    func testUnloadArguments() {
+        let id = identity("id_ed25519")
+        XCTAssertEqual(SSHIdentityService.unloadArguments(for: id), ["-d", id.privateKeyPath])
+    }
+
+    func testUnloadFailedErrorMessage() {
+        let desc = SSHIdentityService.ActivationError.agentUnloadFailed("nope").errorDescription ?? ""
+        XCTAssertTrue(desc.contains("unload"))
+    }
+}
+
+final class ClipboardSelectionTests: XCTestCase {
+    func testCopyFullKeyIdNotTruncated() {
+        // Display shows suffix(16); copy must use the full id.
+        let key = GPGKey(keyId: "ABCDEF0123456789AABB", userId: "T <t@t>")
+        XCTAssertEqual(key.keyId, "ABCDEF0123456789AABB")
+        XCTAssertNotEqual(key.keyId, String(key.keyId.suffix(16)))
+    }
+
+    func testCopyEmptyIsNoOp() {
+        // Clipboard.copy("") must not clobber the pasteboard.
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString("sentinel", forType: .string)
+        Clipboard.copy("")
+        XCTAssertEqual(pb.string(forType: .string), "sentinel")
+    }
+}
+
 final class RemoteUserTests: XCTestCase {
     func testDisplayName() {
         let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1)
