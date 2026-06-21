@@ -1,50 +1,53 @@
 import Foundation
 
 struct GitLabService {
+    /// Resolves the profile the token belongs to (username + avatar) on the configured
+    /// instance. Returns nil when the token is empty or doesn't resolve — the UI hides
+    /// the GitLab row then. `matchedKeyCount` is a secondary detail.
     static func user(forKeys localKeys: [SSHKey], pat: String, instance: String) async -> RemoteUser? {
-        guard !pat.isEmpty, !localKeys.isEmpty else { return nil }
+        guard !pat.isEmpty else { return nil }
 
         let host = instance.isEmpty ? "gitlab.com" : instance
-        guard let url = URL(string: "https://\(host)/api/v4/user/keys") else { return nil }
+        guard let profile = await fetchProfile(pat: pat, instance: host) else { return nil }
+        let matchedCount = await matchedKeyCount(forKeys: localKeys, pat: pat, instance: host)
 
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(pat)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 10
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                return nil
-            }
-
-            let keys = try JSONDecoder().decode([GitLabKey].self, from: data)
-            let localPublicKeys = Set(localKeys.map { normalizeKey($0.publicKey) })
-            let matched = keys.filter { localPublicKeys.contains(normalizeKey($0.key)) }
-
-            if !matched.isEmpty {
-                let username = try await fetchUsername(pat: pat, instance: host)
-                return RemoteUser(service: .gitlab, username: username, matchedKeyCount: matched.count)
-            }
-        } catch {
-            return nil
-        }
-
-        return nil
+        return RemoteUser(
+            service: .gitlab,
+            username: profile.username,
+            matchedKeyCount: matchedCount,
+            avatarUrl: URL(string: profile.avatarUrl ?? "")
+        )
     }
 
-    private static func fetchUsername(pat: String, instance: String) async throws -> String {
-        guard let url = URL(string: "https://\(instance)/api/v4/user") else {
-            throw URLError(.badURL)
-        }
+    private static func fetchProfile(pat: String, instance: String) async -> GitLabUser? {
+        guard let url = URL(string: "https://\(instance)/api/v4/user") else { return nil }
+        guard let data = await get(url, pat: pat) else { return nil }
+        return try? JSONDecoder().decode(GitLabUser.self, from: data)
+    }
 
+    /// Best-effort count of local SSH keys registered on the account; 0 on any failure.
+    private static func matchedKeyCount(forKeys localKeys: [SSHKey], pat: String, instance: String) async -> Int {
+        guard !localKeys.isEmpty,
+              let url = URL(string: "https://\(instance)/api/v4/user/keys"),
+              let data = await get(url, pat: pat),
+              let keys = try? JSONDecoder().decode([GitLabKey].self, from: data) else {
+            return 0
+        }
+        let localPublicKeys = Set(localKeys.map { normalizeKey($0.publicKey) })
+        return keys.filter { localPublicKeys.contains(normalizeKey($0.key)) }.count
+    }
+
+    /// GET helper returning the body only on HTTP 200, nil otherwise.
+    private static func get(_ url: URL, pat: String) async -> Data? {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(pat)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 10
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let user = try JSONDecoder().decode(GitLabUser.self, from: data)
-        return user.username
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            return nil
+        }
+        return data
     }
 
     private static func normalizeKey(_ key: String) -> String {
@@ -60,4 +63,10 @@ private struct GitLabKey: Decodable {
 
 private struct GitLabUser: Decodable {
     let username: String
+    let avatarUrl: String?
+
+    enum CodingKeys: String, CodingKey {
+        case username
+        case avatarUrl = "avatar_url"
+    }
 }

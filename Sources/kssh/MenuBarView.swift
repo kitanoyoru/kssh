@@ -241,13 +241,18 @@ struct MenuBarView: View {
 
     // MARK: - Remote
 
+    @ViewBuilder
     private var remoteSection: some View {
-        SectionCard(icon: "globe", title: "Remote") {
-            if viewModel.sshKeys.isEmpty {
-                EmptyRow(text: "Load SSH keys to check")
-            } else {
-                RemoteRow(name: "GitHub", user: viewModel.githubUser)
-                RemoteRow(name: "GitLab", user: viewModel.gitlabUser)
+        // Only render a service's row when its token resolved to a profile; hide the
+        // whole section when neither did (no tokens configured / none valid).
+        if viewModel.githubUser != nil || viewModel.gitlabUser != nil {
+            SectionCard(icon: "globe", title: "Remote") {
+                if let github = viewModel.githubUser {
+                    RemoteRow(user: github)
+                }
+                if let gitlab = viewModel.gitlabUser {
+                    RemoteRow(user: gitlab)
+                }
             }
         }
     }
@@ -568,21 +573,54 @@ private struct KeyValueRow: View {
 }
 
 private struct RemoteRow: View {
-    let name: String
-    let user: RemoteUser?
+    let user: RemoteUser
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
-            StatusDot(color: user != nil ? StatusColor.active : StatusColor.inactive)
-            Text(name)
-                .font(.callout)
+            avatar
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text(user.displayName)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(matchedText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Spacer(minLength: Spacing.sm)
-            Text(user?.displayName ?? "not linked")
-                .font(.caption)
-                .foregroundStyle(user != nil ? .primary : .secondary)
-                .lineLimit(1)
+            Text(user.service.rawValue)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var matchedText: String {
+        switch user.matchedKeyCount {
+        case 0: return "no keys matched"
+        case 1: return "1 key matched"
+        default: return "\(user.matchedKeyCount) keys matched"
+        }
+    }
+
+    /// The profile avatar, with a placeholder while loading / on failure so the row
+    /// height never shifts (reserved space).
+    @ViewBuilder
+    private var avatar: some View {
+        AsyncImage(url: user.avatarUrl) { phase in
+            switch phase {
+            case .success(let image):
+                image.resizable().scaledToFill()
+            default:
+                Image(systemName: "person.crop.circle.fill")
+                    .resizable()
+                    .foregroundStyle(.secondary.opacity(0.5))
+            }
+        }
+        .frame(width: 22, height: 22)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        .accessibilityHidden(true)
     }
 }
 

@@ -179,9 +179,54 @@ final class ClipboardSelectionTests: XCTestCase {
     }
 }
 
+final class NetrcReaderTests: XCTestCase {
+    func testSingleMachineOnOneLine() {
+        let netrc = "machine github.com login me password ghp_abc123"
+        XCTAssertEqual(NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_abc123")
+    }
+
+    func testMultiLineMachine() {
+        let netrc = """
+        machine github.com
+          login me
+          password ghp_token
+        machine gitlab.com
+          login other
+          password glpat_token
+        """
+        XCTAssertEqual(NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_token")
+        XCTAssertEqual(NetrcReader.password(forMachine: "gitlab.com", contents: netrc), "glpat_token")
+    }
+
+    func testUnknownMachineReturnsNil() {
+        let netrc = "machine github.com login me password ghp_abc"
+        XCTAssertNil(NetrcReader.password(forMachine: "example.com", contents: netrc))
+    }
+
+    func testCommentsIgnored() {
+        let netrc = """
+        # my creds
+        machine github.com login me password ghp_xyz  # inline note
+        """
+        XCTAssertEqual(NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_xyz")
+    }
+
+    func testDefaultActsAsFallback() {
+        let netrc = "machine github.com login me password ghp_specific\ndefault login anon password fallback_tok"
+        // Specific machine wins (matched first).
+        XCTAssertEqual(NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_specific")
+        // An unlisted machine falls through to default.
+        XCTAssertEqual(NetrcReader.password(forMachine: "gitlab.com", contents: netrc), "fallback_tok")
+    }
+
+    func testEmptyContents() {
+        XCTAssertNil(NetrcReader.password(forMachine: "github.com", contents: ""))
+    }
+}
+
 final class RemoteUserTests: XCTestCase {
     func testDisplayName() {
-        let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1)
+        let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1, avatarUrl: nil)
         XCTAssertEqual(user.displayName, "@testuser")
     }
 

@@ -9,6 +9,7 @@ struct RemoteUser: Equatable {
     let service: RemoteService
     let username: String
     let matchedKeyCount: Int
+    let avatarUrl: URL?
 
     var displayName: String {
         "@\(username)"

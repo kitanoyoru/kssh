@@ -67,13 +67,19 @@ final class StatusViewModel: ObservableObject {
         gpgIdentity = gpg
         gpgAvailable = gpgAvail
 
-        if !keys.isEmpty {
-            async let githubResult = GitHubService.user(forKeys: keys, pat: store.githubPat)
-            async let gitlabResult = GitLabService.user(forKeys: keys, pat: store.gitlabPat, instance: store.gitlabInstance)
-            let (gh, gl) = await (githubResult, gitlabResult)
-            githubUser = gh
-            gitlabUser = gl
-        }
+        // Resolve remote profiles from the tokens themselves (not gated on loaded keys);
+        // matched-key count is a secondary detail computed inside the services.
+        // Token priority: the PAT set in Settings, falling back to the ~/.netrc password
+        // for the host so existing git users work without re-entering a token.
+        let gitlabHost = store.gitlabInstance.isEmpty ? "gitlab.com" : store.gitlabInstance
+        let githubToken = store.githubPat.isEmpty ? (NetrcReader.password(forMachine: "github.com") ?? "") : store.githubPat
+        let gitlabToken = store.gitlabPat.isEmpty ? (NetrcReader.password(forMachine: gitlabHost) ?? "") : store.gitlabPat
+
+        async let githubResult = GitHubService.user(forKeys: keys, pat: githubToken)
+        async let gitlabResult = GitLabService.user(forKeys: keys, pat: gitlabToken, instance: store.gitlabInstance)
+        let (gh, gl) = await (githubResult, gitlabResult)
+        githubUser = gh
+        gitlabUser = gl
 
         if let signingKeyId = git?.signingKey {
             gpgIdentity = GPGIdentity(secretKeys: gpg?.secretKeys ?? [], signingKeyId: signingKeyId)
