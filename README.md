@@ -2,6 +2,7 @@
 
 > SSH, Git, and GPG identity management from the macOS menu bar.
 
+[![Release](https://img.shields.io/github/v/release/kitanoyoru/kssh?sort=semver)](https://github.com/kitanoyoru/kssh/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-5.9-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -42,6 +43,30 @@ hand-editing `~/.ssh/config` or running `git config`.
 
 ## Install
 
+### Homebrew (recommended)
+
+```sh
+brew tap kitanoyoru/kssh
+brew install kssh
+```
+
+This builds kssh from source (it needs the Xcode toolchain), then installs a `kssh.app`
+bundle into the Homebrew prefix. To launch it:
+
+```sh
+open "$(brew --prefix)/opt/kssh/kssh.app"
+```
+
+To make it show up in Launchpad / Spotlight, link it into Applications:
+
+```sh
+ln -sf "$(brew --prefix)/opt/kssh/kssh.app" /Applications/kssh.app
+```
+
+Upgrade with `brew upgrade kssh`; remove with `brew uninstall kssh`.
+
+### From a clone
+
 ```sh
 git clone https://github.com/kitanoyoru/kssh.git
 cd kssh
@@ -49,8 +74,7 @@ make install        # builds a release .app and copies it to /Applications
 ```
 
 Then launch **kssh** from `/Applications`. The key icon appears in your menu bar.
-
-To uninstall: `make uninstall`.
+Uninstall with `make uninstall`.
 
 ## Build from source
 

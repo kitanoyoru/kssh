@@ -75,6 +75,37 @@ For SSH/Git config issues, a redacted snippet of the relevant `~/.ssh/config` bl
 secrets removed) is extremely helpful — several real bugs have come from unusual but valid
 config shapes.
 
+## Releasing (maintainers)
+
+kssh is distributed through a Homebrew tap at
+[kitanoyoru/homebrew-kssh](https://github.com/kitanoyoru/homebrew-kssh), whose formula
+builds from a tagged source tarball. To cut a release:
+
+1. Bump the version in the `release` target's `Info.plist` block in the `Makefile`.
+2. Tag and create the GitHub release:
+
+   ```sh
+   git tag -a vX.Y.Z -m "kssh vX.Y.Z"
+   git push origin vX.Y.Z
+   gh release create vX.Y.Z --title "kssh vX.Y.Z" --notes "..."
+   ```
+
+3. Compute the source tarball's checksum:
+
+   ```sh
+   curl -sL https://github.com/kitanoyoru/kssh/archive/refs/tags/vX.Y.Z.tar.gz \
+     | shasum -a 256
+   ```
+
+4. In the tap repo, update `Formula/kssh.rb` — bump the `url` tag and the `sha256` — then
+   verify before pushing:
+
+   ```sh
+   brew audit --strict kitanoyoru/kssh/kssh
+   brew install --build-from-source kitanoyoru/kssh/kssh
+   brew test kitanoyoru/kssh/kssh
+   ```
+
 ## License
 
 By contributing, you agree your contributions are licensed under the [MIT License](LICENSE).
