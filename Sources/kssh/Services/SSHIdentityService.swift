@@ -201,16 +201,20 @@ struct SSHIdentityService {
         }
     }
 
-    /// Pure string transform (testable): make `identity` the single active
-    /// IdentityFile in each Host block, commenting out the others. If a Host block
-    /// has no IdentityFile for it (active or commented), one is inserted.
+    /// Pure string transform (testable). Activates `identity` ONLY within Host blocks
+    /// that already reference it (active or commented `IdentityFile`): the target's line
+    /// is uncommented and the other `IdentityFile` lines in that same block are commented
+    /// out. Blocks that don't mention the target are left completely untouched — so
+    /// switching a github key never clobbers an unrelated host (e.g. gitlab.rentateam.ru).
+    /// No new lines are ever inserted; this only toggles comments on existing lines.
     static func transform(config: String, activating identity: SSHIdentity) -> String {
         let target = identity.privateKeyPath
         let newline = "\n"
         var lines = config.components(separatedBy: newline)
 
-        // Identify Host block boundaries: a block starts at a "Host " line and runs
-        // until the next "Host " line or EOF.
+        // Host block boundaries: a "Host …" line starts a block that runs to the next
+        // "Host …" line or EOF. (Lines before the first Host — e.g. Include — are global
+        // and never touched.)
         var blockStarts: [Int] = []
         for (i, raw) in lines.enumerated() {
             let line = raw.trimmingCharacters(in: .whitespaces)
@@ -218,39 +222,40 @@ struct SSHIdentityService {
                 blockStarts.append(i)
             }
         }
-        guard !blockStarts.isEmpty else { return config } // nothing to touch
+        guard !blockStarts.isEmpty else { return config }
 
-        // Process blocks back-to-front so insertions don't shift earlier indices.
-        for (idx, start) in blockStarts.enumerated().reversed() {
+        for (idx, start) in blockStarts.enumerated() {
             let end = (idx + 1 < blockStarts.count) ? blockStarts[idx + 1] : lines.count
-            var matchedTarget = false
 
+            // Collect this block's IdentityFile lines and whether any references the target.
+            var identityLineIndices: [Int] = []
+            var referencesTarget = false
             for i in start..<end {
-                let raw = lines[i]
-                let stripped = raw.trimmingCharacters(in: .whitespaces)
+                let stripped = lines[i].trimmingCharacters(in: .whitespaces)
                 let uncommented = stripped.hasPrefix("#")
                     ? String(stripped.dropFirst()).trimmingCharacters(in: .whitespaces)
                     : stripped
-
                 guard let path = identityFilePath(in: uncommented) else { continue }
-                let indent = leadingWhitespace(of: raw)
-
-                if expand(path) == target {
-                    // Activate (uncomment / normalize) the chosen key's line.
-                    lines[i] = "\(indent)IdentityFile \(path)"
-                    matchedTarget = true
-                } else if !stripped.hasPrefix("#") {
-                    // Comment out any other active IdentityFile.
-                    lines[i] = "\(indent)#IdentityFile \(path)"
-                }
+                identityLineIndices.append(i)
+                if expand(path) == target { referencesTarget = true }
             }
 
-            // No line referenced the target in this block — insert one after the
-            // Host line (using the indentation of the following line if present).
-            if !matchedTarget {
-                let insertAt = start + 1
-                let indent = insertAt < end ? leadingWhitespace(of: lines[min(insertAt, lines.count - 1)]) : "  "
-                lines.insert("\(indent)IdentityFile \(identity.configPath)", at: insertAt)
+            // Only rewrite blocks that actually reference the target key.
+            guard referencesTarget else { continue }
+
+            for i in identityLineIndices {
+                let stripped = lines[i].trimmingCharacters(in: .whitespaces)
+                let uncommented = stripped.hasPrefix("#")
+                    ? String(stripped.dropFirst()).trimmingCharacters(in: .whitespaces)
+                    : stripped
+                guard let path = identityFilePath(in: uncommented) else { continue }
+                let indent = leadingWhitespace(of: lines[i])
+
+                if expand(path) == target {
+                    lines[i] = "\(indent)IdentityFile \(path)"          // activate
+                } else if !stripped.hasPrefix("#") {
+                    lines[i] = "\(indent)#IdentityFile \(path)"         // deactivate others
+                }
             }
         }
 

@@ -83,11 +83,46 @@ final class SSHIdentityTransformTests: XCTestCase {
         XCTAssertEqual(back, config)
     }
 
-    func testInsertsIdentityFileWhenBlockHasNone() {
+    func testDoesNotInsertIntoBlockWithoutTheKey() {
+        // A block that never references the target is left untouched — no line inserted.
         let cfg = "Host example.com\n\tUser deploy"
         let result = SSHIdentityService.transform(config: cfg, activating: identity("id_ed25519"))
-        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/id_ed25519"))
-        XCTAssertTrue(result.contains("User deploy"))
+        XCTAssertEqual(result, cfg)
+        XCTAssertFalse(result.contains("IdentityFile"))
+    }
+
+    func testLeavesUnrelatedHostBlocksUntouched() {
+        // Regression: switching a github key must NOT rewrite gitlab's working config.
+        let cfg = """
+        Host github.com
+          IdentityFile ~/.ssh/id_ed25519
+          #IdentityFile ~/.ssh/innowise_rsa
+
+        Host gitlab.rentateam.ru
+          IdentityFile ~/.ssh/id_ed25519
+          #IdentityFile ~/.ssh/gitlab_rsa
+        """
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("innowise_rsa"))
+        // github block: innowise activated, id_ed25519 commented.
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/innowise_rsa"))
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/id_ed25519"))
+        // gitlab block: completely unchanged (still active id_ed25519, commented gitlab_rsa).
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/id_ed25519"))
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/gitlab_rsa"))
+    }
+
+    func testIncludeDirectivesPreservedAndIgnored() {
+        let cfg = """
+        Include ~/.orbstack/ssh/config
+
+        Host github.com
+          IdentityFile ~/.ssh/id_ed25519
+          #IdentityFile ~/.ssh/innowise_rsa
+        """
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("innowise_rsa"))
+        XCTAssertTrue(result.contains("Include ~/.orbstack/ssh/config"))
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/innowise_rsa"))
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/id_ed25519"))
     }
 
     func testPreservesIndentation() {
