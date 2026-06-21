@@ -287,11 +287,18 @@ struct SSHIdentityService {
         }
     }
 
-    /// Pure string transform (testable). Activates `identity` ONLY within Host blocks
-    /// that already reference it (active or commented `IdentityFile`): the target's line
-    /// is uncommented and the other `IdentityFile` lines in that same block are commented
-    /// out. Blocks that don't mention the target are left completely untouched — so
-    /// switching a github key never clobbers an unrelated host (e.g. gitlab.rentateam.ru).
+    /// Pure string transform (testable). Activates `identity` across every Host/Match
+    /// block whose pattern matches a block that references the target key. Within those
+    /// blocks the target's `IdentityFile` is uncommented and every competing one is
+    /// commented out; blocks for a *different* host pattern are left completely untouched
+    /// — so switching a github key never clobbers an unrelated host (e.g. gitlab).
+    ///
+    /// Matching by pattern (not by single block) is what makes the user's real layout work:
+    /// two separate `Host github.com` blocks each holding a different key. Because OpenSSH
+    /// treats `IdentityFile` additively, leaving both uncommented keeps the first key in
+    /// play, so a switch appears to do nothing. Grouping sibling blocks by their `Host`/
+    /// `Match` line lets the chosen key win and deactivates its same-host competitor.
+    ///
     /// No new lines are ever inserted; this only toggles comments on existing lines.
     static func transform(config: String, activating identity: SSHIdentity) -> String {
         let target = identity.privateKeyPath
@@ -303,20 +310,30 @@ struct SSHIdentityService {
         let ranges = blockRanges(in: lines)
         guard !ranges.isEmpty else { return config }
 
-        for range in ranges {
-            // Collect this block's IdentityFile lines and whether any references the target.
-            var identityLineIndices: [Int] = []
-            var referencesTarget = false
+        // Normalized `Host …`/`Match …` line, so blocks with identical patterns group
+        // together regardless of trailing/internal whitespace or case.
+        func signature(of range: Range<Int>) -> String {
+            lines[range.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .split { $0 == " " || $0 == "\t" }
+                .joined(separator: " ")
+        }
+        func referencesTarget(_ range: Range<Int>) -> Bool {
             for i in range {
                 guard let path = identityFilePath(in: uncomment(lines[i])) else { continue }
-                identityLineIndices.append(i)
-                if expand(path) == target { referencesTarget = true }
+                if expand(path) == target { return true }
             }
+            return false
+        }
 
-            // Only rewrite blocks that actually reference the target key.
-            guard referencesTarget else { continue }
+        // The host patterns whose blocks reference the target. Only blocks sharing one of
+        // these patterns are rewritten; everything else is left exactly as it was.
+        let targetSignatures = Set(ranges.filter(referencesTarget).map(signature))
+        guard !targetSignatures.isEmpty else { return config }
 
-            for i in identityLineIndices {
+        for range in ranges where targetSignatures.contains(signature(of: range)) {
+            for i in range {
                 let stripped = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let path = identityFilePath(in: uncomment(lines[i])) else { continue }
                 let indent = leadingWhitespace(of: lines[i])
@@ -324,7 +341,7 @@ struct SSHIdentityService {
                 if expand(path) == target {
                     lines[i] = "\(indent)IdentityFile \(path)"          // activate
                 } else if !stripped.hasPrefix("#") {
-                    lines[i] = "\(indent)#IdentityFile \(path)"         // deactivate others
+                    lines[i] = "\(indent)#IdentityFile \(path)"         // deactivate competitor
                 }
             }
         }

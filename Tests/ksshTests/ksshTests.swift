@@ -76,31 +76,31 @@ final class SSHIdentityTransformTests: XCTestCase {
     private let config = """
     Host github.com
     \tUser git
-      #IdentityFile ~/.ssh/aliaksandrrutkouski
-      IdentityFile ~/.ssh/id_ed25519
+      #IdentityFile ~/.ssh/personal
+      IdentityFile ~/.ssh/work
     """
 
     func testActivatesCommentedKeyAndCommentsActive() {
-        let result = SSHIdentityService.transform(config: config, activating: identity("aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/id_ed25519"))
+        let result = SSHIdentityService.transform(config: config, activating: identity("personal"))
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/personal"))
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/work"))
     }
 
     func testActivatingAlreadyActiveIsNoOp() {
-        let result = SSHIdentityService.transform(config: config, activating: identity("id_ed25519"))
+        let result = SSHIdentityService.transform(config: config, activating: identity("work"))
         XCTAssertEqual(result, config)
     }
 
     func testSwitchRoundTripRestoresOriginal() {
-        let once = SSHIdentityService.transform(config: config, activating: identity("aliaksandrrutkouski"))
-        let back = SSHIdentityService.transform(config: once, activating: identity("id_ed25519"))
+        let once = SSHIdentityService.transform(config: config, activating: identity("personal"))
+        let back = SSHIdentityService.transform(config: once, activating: identity("work"))
         XCTAssertEqual(back, config)
     }
 
     func testDoesNotInsertIntoBlockWithoutTheKey() {
         // A block that never references the target is left untouched — no line inserted.
         let cfg = "Host example.com\n\tUser deploy"
-        let result = SSHIdentityService.transform(config: cfg, activating: identity("id_ed25519"))
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("work"))
         XCTAssertEqual(result, cfg)
         XCTAssertFalse(result.contains("IdentityFile"))
     }
@@ -109,20 +109,43 @@ final class SSHIdentityTransformTests: XCTestCase {
         // Regression: switching a github key must NOT rewrite gitlab's working config.
         let cfg = """
         Host github.com
-          IdentityFile ~/.ssh/id_ed25519
-          #IdentityFile ~/.ssh/innowise_rsa
+          IdentityFile ~/.ssh/work
+          #IdentityFile ~/.ssh/personal
 
-        Host gitlab.rentateam.ru
-          IdentityFile ~/.ssh/id_ed25519
-          #IdentityFile ~/.ssh/gitlab_rsa
+        Host gitlab.example.com
+          IdentityFile ~/.ssh/work
+          #IdentityFile ~/.ssh/study
         """
-        let result = SSHIdentityService.transform(config: cfg, activating: identity("innowise_rsa"))
-        // github block: innowise activated, id_ed25519 commented.
-        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/innowise_rsa"))
-        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/id_ed25519"))
-        // gitlab block: completely unchanged (still active id_ed25519, commented gitlab_rsa).
-        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/id_ed25519"))
-        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/gitlab_rsa"))
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
+        // github block: personal activated, work commented.
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/personal"))
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/work"))
+        // gitlab block: completely unchanged (still active work, commented study).
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/work"))
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/study"))
+    }
+
+    func testActivatingDeactivatesCompetingSameHostBlock() {
+        // The user's real layout: two separate `Host github.com` blocks, each with its
+        // own key. Because IdentityFile is additive, leaving both uncommented makes ssh
+        // keep offering the first key — so switching appears to do nothing. Sibling
+        // blocks for the SAME host pattern must compete: activating one deactivates the
+        // other, while unrelated hosts stay untouched.
+        let cfg = """
+        Host github.com
+          IdentityFile ~/.ssh/work
+
+        Host github.com
+          IdentityFile ~/.ssh/personal
+
+        Host gitlab.com
+          IdentityFile ~/.ssh/study
+        """
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/personal"))   // chosen stays active
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/work"))    // sibling deactivated
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/study"))     // unrelated host untouched
+        XCTAssertFalse(result.contains("#IdentityFile ~/.ssh/study"))
     }
 
     func testIncludeDirectivesPreservedAndIgnored() {
@@ -130,71 +153,71 @@ final class SSHIdentityTransformTests: XCTestCase {
         Include ~/.orbstack/ssh/config
 
         Host github.com
-          IdentityFile ~/.ssh/id_ed25519
-          #IdentityFile ~/.ssh/innowise_rsa
+          IdentityFile ~/.ssh/work
+          #IdentityFile ~/.ssh/personal
         """
-        let result = SSHIdentityService.transform(config: cfg, activating: identity("innowise_rsa"))
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
         XCTAssertTrue(result.contains("Include ~/.orbstack/ssh/config"))
-        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/innowise_rsa"))
-        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/id_ed25519"))
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/personal"))
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/work"))
     }
 
     func testPreservesIndentation() {
-        let result = SSHIdentityService.transform(config: config, activating: identity("aliaksandrrutkouski"))
+        let result = SSHIdentityService.transform(config: config, activating: identity("personal"))
         // The two-space indent of the original IdentityFile lines is kept.
-        XCTAssertTrue(result.contains("\n  IdentityFile ~/.ssh/aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("\n  IdentityFile ~/.ssh/personal"))
     }
 
     func testCRLFConfigTogglesAndStaysCRLF() {
-        let cfg = "Host github.com\r\n  IdentityFile ~/.ssh/id_ed25519\r\n  #IdentityFile ~/.ssh/aliaksandrrutkouski"
-        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
+        let cfg = "Host github.com\r\n  IdentityFile ~/.ssh/work\r\n  #IdentityFile ~/.ssh/personal"
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
         XCTAssertTrue(result.contains("\r\n"))                                        // round-trips CRLF
-        XCTAssertTrue(result.contains("\r\n  IdentityFile ~/.ssh/aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("\r\n  #IdentityFile ~/.ssh/id_ed25519"))
+        XCTAssertTrue(result.contains("\r\n  IdentityFile ~/.ssh/personal"))
+        XCTAssertTrue(result.contains("\r\n  #IdentityFile ~/.ssh/work"))
     }
 
     func testEqualsSeparatorIsMatched() {
-        let cfg = "Host x\n  IdentityFile=~/.ssh/id_ed25519\n  #IdentityFile=~/.ssh/aliaksandrrutkouski"
-        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/id_ed25519"))
+        let cfg = "Host x\n  IdentityFile=~/.ssh/work\n  #IdentityFile=~/.ssh/personal"
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
+        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/personal"))
+        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/work"))
     }
 
     func testInlineTrailingTokenIgnored() {
-        let cfg = "Host x\n  IdentityFile ~/.ssh/id_ed25519  # main\n  #IdentityFile ~/.ssh/aliaksandrrutkouski"
-        XCTAssertTrue(SSHIdentityService.configReferences(path("id_ed25519"), in: cfg))
-        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/id_ed25519"))
+        let cfg = "Host x\n  IdentityFile ~/.ssh/work  # main\n  #IdentityFile ~/.ssh/personal"
+        XCTAssertTrue(SSHIdentityService.configReferences(path("work"), in: cfg))
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
+        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/personal"))
+        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/work"))
     }
 
     func testQuotedPathMatched() {
-        let cfg = "Host x\n  IdentityFile \"~/.ssh/id_ed25519\"\n  #IdentityFile ~/.ssh/aliaksandrrutkouski"
-        XCTAssertTrue(SSHIdentityService.configReferences(path("id_ed25519"), in: cfg))
-        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/id_ed25519"))
+        let cfg = "Host x\n  IdentityFile \"~/.ssh/work\"\n  #IdentityFile ~/.ssh/personal"
+        XCTAssertTrue(SSHIdentityService.configReferences(path("work"), in: cfg))
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
+        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/personal"))
+        XCTAssertTrue(result.contains("#IdentityFile ~/.ssh/work"))
     }
 
     func testMatchBlockScopedSeparately() {
         // The Match block references the target; the preceding Host block does not and
-        // must be left fully untouched (its id_ed25519 stays active, not commented).
+        // must be left fully untouched (its work stays active, not commented).
         let cfg = """
         Host github.com
-          IdentityFile ~/.ssh/id_ed25519
+          IdentityFile ~/.ssh/work
 
         Match host gitlab.com
-          IdentityFile ~/.ssh/aliaksandrrutkouski
+          IdentityFile ~/.ssh/personal
         """
-        let result = SSHIdentityService.transform(config: cfg, activating: identity("aliaksandrrutkouski"))
-        XCTAssertTrue(result.contains("Host github.com\n  IdentityFile ~/.ssh/id_ed25519"))
-        XCTAssertFalse(result.contains("#IdentityFile ~/.ssh/id_ed25519"))
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
+        XCTAssertTrue(result.contains("Host github.com\n  IdentityFile ~/.ssh/work"))
+        XCTAssertFalse(result.contains("#IdentityFile ~/.ssh/work"))
     }
 
     func testConfigReferences() {
-        let cfg = "Host x\n  #IdentityFile ~/.ssh/aliaksandrrutkouski"
-        XCTAssertTrue(SSHIdentityService.configReferences(path("aliaksandrrutkouski"), in: cfg))
-        XCTAssertFalse(SSHIdentityService.configReferences(path("id_ed25519"), in: cfg))
+        let cfg = "Host x\n  #IdentityFile ~/.ssh/personal"
+        XCTAssertTrue(SSHIdentityService.configReferences(path("personal"), in: cfg))
+        XCTAssertFalse(SSHIdentityService.configReferences(path("work"), in: cfg))
     }
 
     private func path(_ name: String) -> String {
@@ -211,25 +234,25 @@ final class ActiveIdentityTests: XCTestCase {
     func testPrefersSpecificHostOverWildcard() {
         let cfg = """
         Host *
-          IdentityFile ~/.ssh/id_ed25519
+          IdentityFile ~/.ssh/work
 
         Host github.com
-          IdentityFile ~/.ssh/aliaksandrrutkouski
+          IdentityFile ~/.ssh/personal
         """
-        let ids = [identity("id_ed25519"), identity("aliaksandrrutkouski")]
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "aliaksandrrutkouski")
+        let ids = [identity("work"), identity("personal")]
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "personal")
     }
 
     func testWildcardUsedWhenNoSpecificMatch() {
-        let cfg = "Host *\n  IdentityFile ~/.ssh/id_ed25519"
-        let ids = [identity("id_ed25519"), identity("aliaksandrrutkouski")]
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "id_ed25519")
+        let cfg = "Host *\n  IdentityFile ~/.ssh/work"
+        let ids = [identity("work"), identity("personal")]
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "work")
     }
 
     func testGlobalPreBlockDirectiveIsFallback() {
-        let cfg = "IdentityFile ~/.ssh/id_ed25519\n\nHost github.com\n  User git"
-        let ids = [identity("id_ed25519")]
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "id_ed25519")
+        let cfg = "IdentityFile ~/.ssh/work\n\nHost github.com\n  User git"
+        let ids = [identity("work")]
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "work")
     }
 
     // In a separate-Host-per-key layout the config can't express a single active
@@ -238,24 +261,24 @@ final class ActiveIdentityTests: XCTestCase {
     func testSelectedPathWinsOverConfigInPerHostLayout() {
         let cfg = """
         Host github.com
-          IdentityFile ~/.ssh/key_a
+          IdentityFile ~/.ssh/work
 
         Host gitlab.com
-          IdentityFile ~/.ssh/key_b
+          IdentityFile ~/.ssh/personal
         """
-        let ids = [identity("key_a"), identity("key_b")]
-        // No selection → config resolution picks the first specific block (key_a).
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: nil, in: cfg)?.name, "key_a")
-        // Selecting key_b is honored even though it sits in a later host block.
-        let keyB = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/key_b")
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: keyB, in: cfg)?.name, "key_b")
+        let ids = [identity("work"), identity("personal")]
+        // No selection → config resolution picks the first specific block (work).
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: nil, in: cfg)?.name, "work")
+        // Selecting personal is honored even though it sits in a later host block.
+        let keyB = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/personal")
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: keyB, in: cfg)?.name, "personal")
     }
 
     func testStaleSelectionFallsBackToConfig() {
-        let cfg = "Host github.com\n  IdentityFile ~/.ssh/key_a"
-        let ids = [identity("key_a")]
+        let cfg = "Host github.com\n  IdentityFile ~/.ssh/work"
+        let ids = [identity("work")]
         let gone = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/deleted")
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: gone, in: cfg)?.name, "key_a")
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: gone, in: cfg)?.name, "work")
     }
 }
 
@@ -331,7 +354,7 @@ final class SSHAddArgumentTests: XCTestCase {
     }
 
     func testUnloadArguments() {
-        let id = identity("id_ed25519")
+        let id = identity("work")
         XCTAssertEqual(SSHIdentityService.unloadArguments(for: id), ["-d", id.privateKeyPath])
     }
 
@@ -506,7 +529,7 @@ final class KeyNormalizationTests: XCTestCase {
     func testStripsCommentForMatching() {
         // ssh-add -L includes a comment; GitHub/GitLab return the key without one.
         // Both must normalize to the same "<type> <blob>".
-        let withComment = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123 kitanoyoru@protonmail.com"
+        let withComment = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123 user@example.com"
         let withoutComment = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123"
         XCTAssertEqual(GitHubService.normalizeKey(withComment), GitHubService.normalizeKey(withoutComment))
         XCTAssertEqual(GitHubService.normalizeKey(withComment), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123")
