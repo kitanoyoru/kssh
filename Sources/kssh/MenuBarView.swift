@@ -90,38 +90,20 @@ struct MenuBarView: View {
             icon: "key.horizontal",
             title: "SSH Agent",
             accessory: {
-                StatusPill(
-                    text: viewModel.agentRunning ? "running" : "stopped",
-                    color: viewModel.agentRunning ? StatusColor.active : StatusColor.inactive
-                )
+                if viewModel.agentRunning && !viewModel.sshKeys.isEmpty {
+                    CountBadge(count: viewModel.sshKeys.count)
+                }
             }
         ) {
             if viewModel.sshKeys.isEmpty {
                 EmptyRow(text: viewModel.agentRunning ? "No identities loaded" : "Agent not running")
             } else {
                 ForEach(viewModel.sshKeys) { key in
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(key.comment.isEmpty ? key.keyType : key.comment)
-                            .font(.callout)
-                            .lineLimit(1)
-                        HStack(spacing: Spacing.xs + 1) {
-                            Text(key.keyType.uppercased())
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(
-                                    Capsule().fill(Color.secondary.opacity(0.12))
-                                )
-                            Text(key.shortFingerprint)
-                                .font(.caption2)
-                                .monospaced()
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    IdentityRow(
+                        title: key.comment.isEmpty ? key.keyType : key.comment,
+                        badge: key.keyType.uppercased(),
+                        detail: key.shortFingerprint
+                    )
                 }
             }
         }
@@ -164,25 +146,17 @@ struct MenuBarView: View {
         ) {
             if let gpg = viewModel.gpgIdentity, !gpg.secretKeys.isEmpty {
                 if let signingKey = gpg.activeSigningKey {
-                    KeyValueRow(label: "Signing key", value: String(signingKey.keyId.suffix(16)), mono: true)
-                    Text(signingKey.userId)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    IdentityRow(
+                        title: signingKey.userId,
+                        badge: "ACTIVE",
+                        detail: String(signingKey.keyId.suffix(16))
+                    )
                 } else {
                     ForEach(gpg.secretKeys) { key in
-                        HStack {
-                            Text(key.userId)
-                                .font(.callout)
-                                .lineLimit(1)
-                            Spacer(minLength: Spacing.sm)
-                            Text(String(key.keyId.suffix(16)))
-                                .font(.caption2)
-                                .monospaced()
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        IdentityRow(
+                            title: key.userId,
+                            detail: String(key.keyId.suffix(16))
+                        )
                     }
                 }
             } else {
@@ -286,7 +260,7 @@ private struct SectionCard<Content: View, Accessory: View>: View {
                 accessory()
             }
 
-            VStack(alignment: .leading, spacing: Spacing.xs + 1) {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
                 content()
             }
         }
@@ -305,26 +279,59 @@ private struct SectionCard<Content: View, Accessory: View>: View {
 
 // MARK: - Rows
 
+/// A single identity entry: a primary title, an optional type/state badge, and a
+/// monospace detail (fingerprint, key id). Used by the SSH and GPG sections so every
+/// list row shares the same metrics, alignment, and truncation behavior.
+private struct IdentityRow: View {
+    let title: String
+    var badge: String? = nil
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            Text(title)
+                .font(.callout)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            HStack(spacing: Spacing.xs + 1) {
+                if let badge {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                }
+                Text(detail)
+                    .font(.caption2)
+                    .monospaced()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct KeyValueRow: View {
     let label: String
     let value: String
     var mono: Bool = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Spacer(minLength: Spacing.sm)
             Text(value)
                 .font(mono ? .caption2 : .callout)
                 .monospaced(mono)
                 .foregroundStyle(.primary)
-                .multilineTextAlignment(.trailing)
                 .lineLimit(1)
                 .truncationMode(mono ? .middle : .tail)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

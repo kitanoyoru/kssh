@@ -69,6 +69,25 @@ struct StatusPill: View {
     }
 }
 
+/// A small monochrome count pill (e.g. number of loaded SSH keys) shown as a
+/// section accessory. Distinct from `StatusPill`, which carries semantic color.
+struct CountBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text("\(count)")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, Spacing.sm - 2)
+            .padding(.vertical, 2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.secondary.opacity(0.14))
+            )
+            .accessibilityLabel("\(count) keys")
+    }
+}
+
 // MARK: - Button Styles
 
 /// A full-width action row with smooth hover highlight and press feedback.
