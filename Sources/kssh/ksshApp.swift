@@ -21,17 +21,5 @@ struct ksshApp: App {
             SettingsView()
                 .managedWindowActivation()
         }
-
-        Window("Create GPG Key", id: "create-gpg-key") {
-            CreateGPGKeyView(viewModel: viewModel)
-                .managedWindowActivation()
-        }
-        .windowResizability(.contentSize)
-
-        Window("Manage Git Profiles", id: "manage-git-profiles") {
-            ManageProfilesView(store: viewModel.store)
-                .managedWindowActivation()
-        }
-        .windowResizability(.contentSize)
     }
 }

@@ -1,11 +1,76 @@
 import SwiftUI
 
+/// In-popover navigation. Detail routes replace the whole popover content (their own
+/// back header instead of the main header/actions). A `NavigationStack` isn't used: a
+/// MenuBarExtra(.window) popover doesn't host nav-bar chrome well, and the depth here is
+/// shallow (main → profiles list → profile form; main → create GPG).
+private enum Route: Equatable {
+    case main
+    case profilesList
+    case profileForm(editing: GitProfile?)   // nil = add
+    case createGPGKey
+
+    /// Where the back button returns to.
+    var parent: Route {
+        switch self {
+        case .main, .profilesList, .createGPGKey: return .main
+        case .profileForm: return .profilesList
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .main: return "kssh"
+        case .profilesList: return "Git Profiles"
+        case .profileForm(let editing): return editing == nil ? "Add Profile" : "Edit Profile"
+        case .createGPGKey: return "Create GPG Key"
+        }
+    }
+}
+
 struct MenuBarView: View {
     @ObservedObject var viewModel: StatusViewModel
     @ObservedObject var store: SettingsStore
-    @Environment(\.openWindow) private var openWindow
+    @State private var route: Route = .main
 
     var body: some View {
+        ZStack {
+            switch route {
+            case .main:
+                mainContent
+                    .transition(.move(edge: .leading))
+            case .profilesList:
+                routeScreen { profilesListScreen }
+                    .transition(.move(edge: .trailing))
+            case .profileForm(let editing):
+                routeScreen {
+                    ProfileFormScreen(store: store, editing: editing) {
+                        withAnimation { route = .profilesList }
+                    }
+                }
+                .transition(.move(edge: .trailing))
+            case .createGPGKey:
+                routeScreen {
+                    CreateGPGScreen(viewModel: viewModel) {
+                        withAnimation { route = .main }
+                    }
+                }
+                .transition(.move(edge: .trailing))
+            }
+        }
+        .frame(width: 300)
+        .clipped()
+        .animation(.easeInOut(duration: 0.22), value: route)
+        .onAppear { viewModel.startAutoRefresh() }
+        .onDisappear {
+            viewModel.stopAutoRefresh()
+            route = .main   // ephemeral popover: fresh open, discard unsaved form text
+        }
+    }
+
+    // MARK: - Main content
+
+    private var mainContent: some View {
         VStack(spacing: 0) {
             header
 
@@ -36,9 +101,71 @@ struct MenuBarView: View {
 
             actionsSection
         }
-        .frame(width: 300)
-        .onAppear { viewModel.startAutoRefresh() }
-        .onDisappear { viewModel.stopAutoRefresh() }
+    }
+
+    // MARK: - Route chrome
+
+    /// Wraps a detail screen with a back header + divider, matching mainContent's rhythm.
+    @ViewBuilder
+    private func routeScreen<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            DetailHeader(title: route.title) {
+                withAnimation { route = route.parent }
+            }
+            Divider()
+                .padding(.horizontal, Spacing.md)
+            content()
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, Spacing.md)
+        }
+    }
+
+    // MARK: - Profiles list screen
+
+    private var profilesListScreen: some View {
+        VStack(spacing: Spacing.sm) {
+            if store.gitProfiles.isEmpty {
+                EmptyRow(text: "No profiles yet")
+            } else {
+                ForEach(store.gitProfiles) { profile in
+                    HStack(spacing: Spacing.sm) {
+                        VStack(alignment: .leading, spacing: Spacing.xxs) {
+                            Text(profile.name).font(.callout).lineLimit(1)
+                            Text(profile.email)
+                                .font(.caption2)
+                                .monospaced()
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: Spacing.xs)
+                        Button { withAnimation { route = .profileForm(editing: profile) } } label: {
+                            Image(systemName: "pencil").font(.system(size: 12))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Edit profile")
+                        Button(role: .destructive) { store.deleteProfile(profile) } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12))
+                                .foregroundStyle(StatusColor.destructive)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Delete profile")
+                    }
+                    .padding(.horizontal, Spacing.xs + 2)
+                    .padding(.vertical, Spacing.xs + 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                    )
+                }
+            }
+            Button { withAnimation { route = .profileForm(editing: nil) } } label: {
+                actionLabelRow("Add profile", systemImage: "plus.circle")
+            }
+            .buttonStyle(MenuActionButtonStyle())
+        }
     }
 
     // MARK: - Header
@@ -193,7 +320,7 @@ struct MenuBarView: View {
     }
 
     private var manageProfilesButton: some View {
-        Button(action: { WindowActivator.activate(); openWindow(id: "manage-git-profiles") }) {
+        Button(action: { withAnimation { route = .profilesList } }) {
             HStack(spacing: Spacing.xs + 1) {
                 Image(systemName: "person.2.badge.gearshape")
                     .font(.system(size: 11, weight: .semibold))
@@ -257,7 +384,7 @@ struct MenuBarView: View {
     }
 
     private var createGPGKeyButton: some View {
-        Button(action: { WindowActivator.activate(); openWindow(id: "create-gpg-key") }) {
+        Button(action: { withAnimation { route = .createGPGKey } }) {
             HStack(spacing: Spacing.xs + 1) {
                 Image(systemName: "plus.circle")
                     .font(.system(size: 11, weight: .semibold))
@@ -334,6 +461,153 @@ struct MenuBarView: View {
             SpinningIcon(systemImage: systemImage, spinning: spin)
             Text(title)
             Spacer()
+        }
+    }
+}
+
+// MARK: - Route chrome & screens
+
+/// A label row matching `MenuBarView.actionLabel`, usable from the file-private screen
+/// structs (which can't call the instance method). No spinner — screens don't need it.
+private func actionLabelRow(_ title: String, systemImage: String) -> some View {
+    HStack(spacing: Spacing.sm + 2) {
+        Image(systemName: systemImage)
+            .font(.system(size: 12, weight: .medium))
+            .frame(width: 16)
+        Text(title)
+        Spacer()
+    }
+}
+
+/// Back header for detail routes: a chevron button + title, mirroring the main header.
+private struct DetailHeader: View {
+    let title: String
+    let onBack: () -> Void
+
+    var body: some View {
+        HStack(spacing: Spacing.sm) {
+            Button(action: onBack) {
+                Image(systemName: "chevron.backward")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: Radius.row + 2, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.14))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+
+            Text(title)
+                .font(.headline)
+            Spacer(minLength: Spacing.sm)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.md - 2)
+    }
+}
+
+/// Add/edit form for a single git profile. `@State` seeds from `editing` in init, so a
+/// new instance per route (distinct `editing`) shows the right values.
+private struct ProfileFormScreen: View {
+    @ObservedObject var store: SettingsStore
+    let editing: GitProfile?
+    let onDone: () -> Void
+
+    @State private var name: String
+    @State private var email: String
+
+    init(store: SettingsStore, editing: GitProfile?, onDone: @escaping () -> Void) {
+        self.store = store
+        self.editing = editing
+        self.onDone = onDone
+        _name = State(initialValue: editing?.name ?? "")
+        _email = State(initialValue: editing?.email ?? "")
+    }
+
+    private var canSave: Bool { !name.isEmpty && email.contains("@") }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            TextField("Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+            TextField("Email", text: $email)
+                .textFieldStyle(.roundedBorder)
+            Button {
+                if let editing {
+                    store.updateProfile(GitProfile(id: editing.id, name: name, email: email))
+                } else {
+                    store.addProfile(GitProfile(name: name, email: email))
+                }
+                onDone()
+            } label: {
+                actionLabelRow(editing == nil ? "Add profile" : "Save changes", systemImage: "checkmark.circle")
+            }
+            .buttonStyle(MenuActionButtonStyle())
+            .disabled(!canSave)
+        }
+    }
+}
+
+/// Create-GPG-key form, ported narrow for the popover. Navigates back on success.
+private struct CreateGPGScreen: View {
+    @ObservedObject var viewModel: StatusViewModel
+    let onDone: () -> Void
+
+    @State private var name = ""
+    @State private var email = ""
+    @State private var passphrase = ""
+
+    private var canCreate: Bool {
+        viewModel.gpgAvailable && !name.isEmpty && email.contains("@") && !viewModel.creatingGPGKey
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            if !viewModel.gpgAvailable {
+                Label("gpg is not installed", systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(StatusColor.warning)
+                Text("Install with: brew install gnupg")
+                    .font(.caption2)
+                    .monospaced()
+                    .foregroundStyle(.secondary)
+            }
+
+            TextField("Name", text: $name).textFieldStyle(.roundedBorder)
+            TextField("Email", text: $email).textFieldStyle(.roundedBorder)
+            SecureField("Passphrase (optional)", text: $passphrase).textFieldStyle(.roundedBorder)
+
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                KeyValueRow(label: "Algorithm", value: "ed25519")
+                KeyValueRow(label: "Usage", value: "sign, certify")
+                KeyValueRow(label: "Expiry", value: "never")
+            }
+
+            if let err = viewModel.gpgCreateError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(StatusColor.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: Spacing.sm) {
+                if viewModel.creatingGPGKey {
+                    ProgressView().controlSize(.small)
+                }
+                Button {
+                    Task {
+                        let ok = await viewModel.createGPGKey(name: name, email: email, passphrase: passphrase)
+                        if ok { onDone() }
+                    }
+                } label: {
+                    actionLabelRow("Create key", systemImage: "plus.circle")
+                }
+                .buttonStyle(MenuActionButtonStyle())
+                .disabled(!canCreate)
+            }
         }
     }
 }
