@@ -34,9 +34,9 @@ release:
 	@echo '    <key>CFBundleIdentifier</key>' >> $(APP_BUNDLE)/Contents/Info.plist
 	@echo '    <string>com.kssh.app</string>' >> $(APP_BUNDLE)/Contents/Info.plist
 	@echo '    <key>CFBundleVersion</key>' >> $(APP_BUNDLE)/Contents/Info.plist
-	@echo '    <string>1.1.1</string>' >> $(APP_BUNDLE)/Contents/Info.plist
+	@echo '    <string>1.1.2</string>' >> $(APP_BUNDLE)/Contents/Info.plist
 	@echo '    <key>CFBundleShortVersionString</key>' >> $(APP_BUNDLE)/Contents/Info.plist
-	@echo '    <string>1.1.1</string>' >> $(APP_BUNDLE)/Contents/Info.plist
+	@echo '    <string>1.1.2</string>' >> $(APP_BUNDLE)/Contents/Info.plist
 	@echo '    <key>LSMinimumSystemVersion</key>' >> $(APP_BUNDLE)/Contents/Info.plist
 	@echo '    <string>14.0</string>' >> $(APP_BUNDLE)/Contents/Info.plist
 	@echo '    <key>LSUIElement</key>' >> $(APP_BUNDLE)/Contents/Info.plist
