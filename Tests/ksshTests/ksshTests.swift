@@ -231,6 +231,32 @@ final class ActiveIdentityTests: XCTestCase {
         let ids = [identity("id_ed25519")]
         XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "id_ed25519")
     }
+
+    // In a separate-Host-per-key layout the config can't express a single active
+    // identity (each key is permanently active for its own host), so config resolution
+    // always reports the first specific block's key. An explicit user selection must win.
+    func testSelectedPathWinsOverConfigInPerHostLayout() {
+        let cfg = """
+        Host github.com
+          IdentityFile ~/.ssh/key_a
+
+        Host gitlab.com
+          IdentityFile ~/.ssh/key_b
+        """
+        let ids = [identity("key_a"), identity("key_b")]
+        // No selection → config resolution picks the first specific block (key_a).
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: nil, in: cfg)?.name, "key_a")
+        // Selecting key_b is honored even though it sits in a later host block.
+        let keyB = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/key_b")
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: keyB, in: cfg)?.name, "key_b")
+    }
+
+    func testStaleSelectionFallsBackToConfig() {
+        let cfg = "Host github.com\n  IdentityFile ~/.ssh/key_a"
+        let ids = [identity("key_a")]
+        let gone = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/deleted")
+        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: gone, in: cfg)?.name, "key_a")
+    }
 }
 
 final class GPGKeygenArgumentTests: XCTestCase {

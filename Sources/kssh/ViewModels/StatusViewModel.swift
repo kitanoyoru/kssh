@@ -118,7 +118,7 @@ final class StatusViewModel: ObservableObject {
         // the config can be switched even when the agent is stopped.
         let identities = await SSHIdentityService.discover()
         availableIdentities = identities
-        activeIdentity = SSHIdentityService.activeIdentity(among: identities)
+        activeIdentity = SSHIdentityService.activeIdentity(among: identities, selectedPath: store.activeIdentityPath)
 
         // When the agent is off, the UI shows a dedicated "Agent off" section with an
         // Enable button instead of the normal sections, so no error banner is needed here.
@@ -138,6 +138,9 @@ final class StatusViewModel: ObservableObject {
 
         do {
             let result = try await SSHIdentityService.activate(identity)
+            // Remember the explicit choice so the active highlight follows it, even when
+            // the config layout (separate Host per key) can't express a single active key.
+            store.activeIdentityPath = identity.privateKeyPath
             if result == .agentOnly {
                 notice = "Switched in the agent only — \(identity.displayName) isn't referenced in ~/.ssh/config, so the file was left unchanged."
             }

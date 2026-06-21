@@ -19,6 +19,22 @@ final class SettingsStore: ObservableObject {
     }
 
     private static let gitProfilesKey = "gitProfiles"
+    private static let activeIdentityKey = "activeIdentityPath"
+
+    /// Absolute path of the SSH key the user last switched to, persisted so the active
+    /// highlight survives relaunch and reflects the user's choice even in configs that
+    /// can't express a single active identity (separate Host per key). See
+    /// `SSHIdentityService.activeIdentity(among:selectedPath:)`.
+    var activeIdentityPath: String? {
+        get { UserDefaults.standard.string(forKey: Self.activeIdentityKey) }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(newValue, forKey: Self.activeIdentityKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.activeIdentityKey)
+            }
+        }
+    }
 
     /// Upper bound on stored git profiles, enforced by `addProfile` and surfaced in the UI.
     static let maxProfiles = 5

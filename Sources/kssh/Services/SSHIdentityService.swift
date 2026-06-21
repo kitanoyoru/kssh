@@ -80,6 +80,27 @@ struct SSHIdentityService {
         return activeIdentity(among: identities, in: contents)
     }
 
+    /// The active identity, preferring the user's explicit prior selection over the
+    /// config-derived value. A separate-Host-per-key config can't express a single
+    /// active identity — every key is permanently active for its own host — so config
+    /// resolution can only ever report the first specific block's key. Persisting the
+    /// last switched-to key (`selectedPath`) lets the UI reflect the user's choice.
+    /// A stale selection (key no longer on disk) falls back to config resolution.
+    static func activeIdentity(among identities: [SSHIdentity], selectedPath: String?) -> SSHIdentity? {
+        guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+            return selectedPath.flatMap { sel in identities.first { $0.privateKeyPath == sel } }
+        }
+        return activeIdentity(among: identities, selectedPath: selectedPath, in: contents)
+    }
+
+    /// Pure, testable overload of the selection-aware resolver.
+    static func activeIdentity(among identities: [SSHIdentity], selectedPath: String?, in config: String) -> SSHIdentity? {
+        if let selectedPath, let selected = identities.first(where: { $0.privateKeyPath == selectedPath }) {
+            return selected
+        }
+        return activeIdentity(among: identities, in: config)
+    }
+
     /// Pure, testable scope-aware resolver. Returns the uncommented `IdentityFile`
     /// from the most specific scope: a match inside a specific `Host` block wins over
     /// one from a `Host *` default or a global (pre-block) directive. Falls back to a
