@@ -13,6 +13,11 @@ final class StatusViewModel: ObservableObject {
     @Published var agentSocket: String?
     @Published var error: String?
 
+    /// Keypairs discovered on disk under ~/.ssh, and which one is currently active.
+    @Published var availableIdentities: [SSHIdentity] = []
+    @Published var activeIdentity: SSHIdentity?
+    @Published var switchingIdentity: String?
+
     private let store = SettingsStore()
     private var refreshTask: Task<Void, Never>?
 
@@ -67,12 +72,35 @@ final class StatusViewModel: ObservableObject {
         agentRunning = running
         agentSocket = await SSHService.agentPid()
 
+        // Discover on-disk keypairs and the active one regardless of agent state —
+        // the config can be switched even when the agent is stopped.
+        let identities = await SSHIdentityService.discover()
+        availableIdentities = identities
+        activeIdentity = SSHIdentityService.activeIdentity(among: identities)
+
         guard running else {
             error = "SSH agent not running. Start it with: eval \"$(ssh-agent -s)\""
             return []
         }
 
         return await SSHService.loadedKeys()
+    }
+
+    /// Switches the active SSH identity: rewrites ~/.ssh/config and reloads the
+    /// agent, then refreshes all derived state.
+    func switchIdentity(_ identity: SSHIdentity) async {
+        guard switchingIdentity == nil else { return }
+        switchingIdentity = identity.id
+        error = nil
+        defer { switchingIdentity = nil }
+
+        do {
+            try await SSHIdentityService.activate(identity)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+        await refresh()
     }
 
     private func loadGit() async -> GitIdentity? {

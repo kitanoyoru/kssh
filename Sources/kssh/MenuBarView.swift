@@ -16,6 +16,7 @@ struct MenuBarView: View {
                 ScrollView {
                     VStack(spacing: Spacing.sm) {
                         sshSection
+                        identitySwitcherSection
                         gitSection
                         gpgSection
                         remoteSection
@@ -104,6 +105,35 @@ struct MenuBarView: View {
                         badge: key.keyType.uppercased(),
                         detail: key.shortFingerprint
                     )
+                }
+            }
+        }
+    }
+
+    // MARK: - Identity Switcher
+
+    private var identitySwitcherSection: some View {
+        SectionCard(
+            icon: "person.crop.circle",
+            title: "Identity",
+            accessory: {
+                if viewModel.availableIdentities.count > 1 {
+                    CountBadge(count: viewModel.availableIdentities.count)
+                }
+            }
+        ) {
+            if viewModel.availableIdentities.isEmpty {
+                EmptyRow(text: "No keys found in ~/.ssh")
+            } else {
+                ForEach(viewModel.availableIdentities) { identity in
+                    IdentitySwitchRow(
+                        identity: identity,
+                        isActive: identity.id == viewModel.activeIdentity?.id,
+                        isSwitching: identity.id == viewModel.switchingIdentity,
+                        disabled: viewModel.switchingIdentity != nil
+                    ) {
+                        Task { await viewModel.switchIdentity(identity) }
+                    }
                 }
             }
         }
@@ -311,6 +341,84 @@ private struct IdentityRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A selectable identity row in the switcher. Shows a check for the active key,
+/// a spinner while activating, and switches on tap.
+private struct IdentitySwitchRow: View {
+    let identity: SSHIdentity
+    let isActive: Bool
+    let isSwitching: Bool
+    let disabled: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.sm) {
+                leadingIndicator
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text(identity.displayName)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    HStack(spacing: Spacing.xs + 1) {
+                        Text(identity.keyType.uppercased())
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                        Text(identity.name)
+                            .font(.caption2)
+                            .monospaced()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: Spacing.xs)
+            }
+            .padding(.horizontal, Spacing.xs + 2)
+            .padding(.vertical, Spacing.xs + 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                    .fill(rowFill)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled || isActive)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
+        }
+    }
+
+    @ViewBuilder
+    private var leadingIndicator: some View {
+        if isSwitching {
+            ProgressView().controlSize(.small).frame(width: 16)
+        } else if isActive {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(StatusColor.active)
+                .frame(width: 16)
+        } else {
+            Image(systemName: "circle")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary.opacity(0.5))
+                .frame(width: 16)
+        }
+    }
+
+    private var rowFill: Color {
+        if isActive { return StatusColor.active.opacity(0.10) }
+        if isHovering && !disabled { return Color.primary.opacity(0.06) }
+        return .clear
     }
 }
 

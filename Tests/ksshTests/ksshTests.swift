@@ -53,6 +53,50 @@ final class GPGIdentityTests: XCTestCase {
     }
 }
 
+final class SSHIdentityTransformTests: XCTestCase {
+    private func identity(_ name: String) -> SSHIdentity {
+        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/\(name)")
+        return SSHIdentity(privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "x")
+    }
+
+    private let config = """
+    Host github.com
+    \tUser git
+      #IdentityFile ~/.ssh/aliaksandrrutkouski
+      IdentityFile ~/.ssh/id_ed25519
+    """
+
+    func testActivatesCommentedKeyAndCommentsActive() {
+        let result = SSHIdentityService.transform(config: config, activating: identity("aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/aliaksandrrutkouski"))
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/id_ed25519"))
+    }
+
+    func testActivatingAlreadyActiveIsNoOp() {
+        let result = SSHIdentityService.transform(config: config, activating: identity("id_ed25519"))
+        XCTAssertEqual(result, config)
+    }
+
+    func testSwitchRoundTripRestoresOriginal() {
+        let once = SSHIdentityService.transform(config: config, activating: identity("aliaksandrrutkouski"))
+        let back = SSHIdentityService.transform(config: once, activating: identity("id_ed25519"))
+        XCTAssertEqual(back, config)
+    }
+
+    func testInsertsIdentityFileWhenBlockHasNone() {
+        let cfg = "Host example.com\n\tUser deploy"
+        let result = SSHIdentityService.transform(config: cfg, activating: identity("id_ed25519"))
+        XCTAssertTrue(result.contains("IdentityFile ~/.ssh/id_ed25519"))
+        XCTAssertTrue(result.contains("User deploy"))
+    }
+
+    func testPreservesIndentation() {
+        let result = SSHIdentityService.transform(config: config, activating: identity("aliaksandrrutkouski"))
+        // The two-space indent of the original IdentityFile lines is kept.
+        XCTAssertTrue(result.contains("\n  IdentityFile ~/.ssh/aliaksandrrutkouski"))
+    }
+}
+
 final class RemoteUserTests: XCTestCase {
     func testDisplayName() {
         let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1)
