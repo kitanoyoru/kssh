@@ -50,9 +50,13 @@ struct GitLabService {
         return data
     }
 
+    /// Normalizes an OpenSSH public key to `<type> <base64-blob>`, dropping the trailing
+    /// comment — GitLab's API omits it while `ssh-add -L` includes one, so full-line
+    /// comparison never matched.
     private static func normalizeKey(_ key: String) -> String {
-        key.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "  ", with: " ")
+        let fields = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0 == " " || $0 == "\t" })
+        return fields.prefix(2).joined(separator: " ")
     }
 }
 

@@ -177,6 +177,24 @@ final class StatusViewModelLoadedTests: XCTestCase {
         XCTAssertTrue(vm.isLoaded(match))
         XCTAssertFalse(vm.isLoaded(other))
     }
+
+    func testActiveKeyResolvesByFingerprint() {
+        let vm = StatusViewModel()
+        let loaded = [
+            SSHKey(keyType: "ED25519", fingerprint: "SHA256:abc", comment: "", publicKey: "ssh-ed25519 AAA"),
+            SSHKey(keyType: "RSA", fingerprint: "SHA256:def", comment: "", publicKey: "ssh-rsa BBB")
+        ]
+        vm.activeIdentity = SSHIdentity(privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "SHA256:def")
+        XCTAssertEqual(vm.activeKey(in: loaded)?.fingerprint, "SHA256:def")
+
+        // No active identity → nil.
+        vm.activeIdentity = nil
+        XCTAssertNil(vm.activeKey(in: loaded))
+
+        // Active identity whose key isn't loaded → nil.
+        vm.activeIdentity = SSHIdentity(privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "SHA256:notloaded")
+        XCTAssertNil(vm.activeKey(in: loaded))
+    }
 }
 
 final class SSHAddArgumentTests: XCTestCase {
@@ -338,5 +356,38 @@ final class RemoteUserTests: XCTestCase {
         XCTAssertEqual(RemoteService.allCases.count, 2)
         XCTAssertTrue(RemoteService.allCases.contains(.github))
         XCTAssertTrue(RemoteService.allCases.contains(.gitlab))
+    }
+
+    func testBelongsToActiveKey() {
+        // matchedKeyCount is scoped to the active key: >=1 means the row should show.
+        let linked = RemoteUser(service: .github, username: "u", matchedKeyCount: 1, avatarUrl: nil)
+        let unlinked = RemoteUser(service: .github, username: "u", matchedKeyCount: 0, avatarUrl: nil)
+        XCTAssertTrue(linked.belongsToActiveKey)
+        XCTAssertFalse(unlinked.belongsToActiveKey)
+    }
+}
+
+final class KeyNormalizationTests: XCTestCase {
+    func testStripsCommentForMatching() {
+        // ssh-add -L includes a comment; GitHub/GitLab return the key without one.
+        // Both must normalize to the same "<type> <blob>".
+        let withComment = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123 kitanoyoru@protonmail.com"
+        let withoutComment = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123"
+        XCTAssertEqual(GitHubService.normalizeKey(withComment), GitHubService.normalizeKey(withoutComment))
+        XCTAssertEqual(GitHubService.normalizeKey(withComment), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123")
+    }
+
+    func testDifferentBlobsDoNotMatch() {
+        XCTAssertNotEqual(
+            GitHubService.normalizeKey("ssh-ed25519 AAAA1111 a@b"),
+            GitHubService.normalizeKey("ssh-ed25519 AAAA2222 a@b")
+        )
+    }
+
+    func testHandlesExtraWhitespace() {
+        XCTAssertEqual(
+            GitHubService.normalizeKey("  ssh-ed25519   AAAA1111   me@host  "),
+            "ssh-ed25519 AAAA1111"
+        )
     }
 }

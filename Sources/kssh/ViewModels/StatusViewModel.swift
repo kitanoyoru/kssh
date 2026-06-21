@@ -76,16 +76,22 @@ final class StatusViewModel: ObservableObject {
         gpgIdentity = gpg
         gpgAvailable = gpgAvail
 
-        // Resolve remote profiles from the tokens themselves (not gated on loaded keys);
-        // matched-key count is a secondary detail computed inside the services.
+        // Resolve remote profiles, scoped to the ACTIVE SSH key: a remote is shown only
+        // if the currently-active key is registered on the token's account. Switching to
+        // a key that isn't on that account hides the row (see remoteSection's gate).
         // Token priority: the PAT set in Settings, falling back to the ~/.netrc password
         // for the host so existing git users work without re-entering a token.
         let gitlabHost = store.gitlabInstance.isEmpty ? "gitlab.com" : store.gitlabInstance
         let githubToken = store.githubPat.isEmpty ? (NetrcReader.password(forMachine: "github.com") ?? "") : store.githubPat
         let gitlabToken = store.gitlabPat.isEmpty ? (NetrcReader.password(forMachine: gitlabHost) ?? "") : store.gitlabPat
 
-        async let githubResult = GitHubService.user(forKeys: keys, pat: githubToken)
-        async let gitlabResult = GitLabService.user(forKeys: keys, pat: gitlabToken, instance: store.gitlabInstance)
+        // The loaded key matching the active config identity (by fingerprint). Only this
+        // key is checked against each account; if there's no active loaded key, the remote
+        // services see no keys and report 0 matches, which hides the rows.
+        let activeKeys = activeKey(in: keys).map { [$0] } ?? []
+
+        async let githubResult = GitHubService.user(forKeys: activeKeys, pat: githubToken)
+        async let gitlabResult = GitLabService.user(forKeys: activeKeys, pat: gitlabToken, instance: store.gitlabInstance)
         let (gh, gl) = await (githubResult, gitlabResult)
         githubUser = gh
         gitlabUser = gl
@@ -156,6 +162,14 @@ final class StatusViewModel: ObservableObject {
     /// comparison is reliable.
     func isLoaded(_ identity: SSHIdentity) -> Bool {
         sshKeys.contains { $0.fingerprint == identity.fingerprint }
+    }
+
+    /// The loaded agent key corresponding to the active config identity (matched by
+    /// fingerprint). Used to scope the Remote section to the active key only. Returns
+    /// nil when no identity is active or its key isn't loaded.
+    func activeKey(in keys: [SSHKey]) -> SSHKey? {
+        guard let activeFingerprint = activeIdentity?.fingerprint else { return nil }
+        return keys.first { $0.fingerprint == activeFingerprint }
     }
 
     /// Loads a single key into the agent (ssh-add) without rewriting ~/.ssh/config,

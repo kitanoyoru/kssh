@@ -53,9 +53,14 @@ struct GitHubService {
         return data
     }
 
-    private static func normalizeKey(_ key: String) -> String {
-        key.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "  ", with: " ")
+    /// Normalizes an OpenSSH public key for comparison to just `<type> <base64-blob>`,
+    /// dropping the trailing comment. GitHub's /user/keys returns keys without a comment,
+    /// while `ssh-add -L` includes one (e.g. "… user@host") — so comparing the full line
+    /// never matched. Two keys are equal iff their type + blob match.
+    static func normalizeKey(_ key: String) -> String {
+        let fields = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0 == " " || $0 == "\t" })
+        return fields.prefix(2).joined(separator: " ")
     }
 }
 

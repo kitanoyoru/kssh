@@ -403,16 +403,16 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private var remoteSection: some View {
-        // Only render a service's row when its token resolved to a profile; hide the
-        // whole section when neither did (no tokens configured / none valid).
-        if viewModel.githubUser != nil || viewModel.gitlabUser != nil {
+        // Show a service's row only when the ACTIVE SSH key is registered on that
+        // account (matchedKeyCount >= 1). The remote fetch is already scoped to the
+        // active key, so a resolved profile with 0 matches means "this remote isn't for
+        // the active key" → hide it. The whole section hides when neither qualifies.
+        let github = viewModel.githubUser.flatMap { $0.belongsToActiveKey ? $0 : nil }
+        let gitlab = viewModel.gitlabUser.flatMap { $0.belongsToActiveKey ? $0 : nil }
+        if github != nil || gitlab != nil {
             SectionCard(icon: "globe", title: "Remote") {
-                if let github = viewModel.githubUser {
-                    RemoteRow(user: github)
-                }
-                if let gitlab = viewModel.gitlabUser {
-                    RemoteRow(user: gitlab)
-                }
+                if let github { RemoteRow(user: github) }
+                if let gitlab { RemoteRow(user: gitlab) }
             }
         }
     }
@@ -891,9 +891,9 @@ private struct RemoteRow: View {
                     .font(.callout)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text(matchedText)
+                Text("active key linked")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(StatusColor.active)
             }
             Spacer(minLength: Spacing.sm)
             Text(user.service.rawValue)
@@ -901,14 +901,6 @@ private struct RemoteRow: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    private var matchedText: String {
-        switch user.matchedKeyCount {
-        case 0: return "no keys matched"
-        case 1: return "1 key matched"
-        default: return "\(user.matchedKeyCount) keys matched"
-        }
     }
 
     /// The profile avatar, with a placeholder while loading / on failure so the row
