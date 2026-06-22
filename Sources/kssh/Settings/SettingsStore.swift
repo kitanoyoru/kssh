@@ -9,6 +9,12 @@ final class SettingsStore: ObservableObject {
         didSet { KeychainManager.save(key: "gitlabPat", value: gitlabPat) }
     }
     @AppStorage("gitlabInstance") var gitlabInstance = "gitlab.com"
+    @Published var bitbucketUsername: String {
+        didSet { KeychainManager.save(key: "bitbucketUsername", value: bitbucketUsername) }
+    }
+    @Published var bitbucketAppPassword: String {
+        didSet { KeychainManager.save(key: "bitbucketAppPassword", value: bitbucketAppPassword) }
+    }
 
     /// User-defined git identity presets, persisted as JSON in UserDefaults (names/emails
     /// are non-sensitive, so no Keychain). `@Published`+`didSet` mirrors the PAT pattern;
@@ -48,6 +54,8 @@ final class SettingsStore: ObservableObject {
     init() {
         self.githubPat = KeychainManager.read(key: "githubPat") ?? ""
         self.gitlabPat = KeychainManager.read(key: "gitlabPat") ?? ""
+        self.bitbucketUsername = KeychainManager.read(key: "bitbucketUsername") ?? ""
+        self.bitbucketAppPassword = KeychainManager.read(key: "bitbucketAppPassword") ?? ""
         // Assigned after the stored properties above; `didSet` does not fire on the
         // initial assignment in init, so this does not re-persist on launch.
         self.gitProfiles = Self.loadProfiles()
@@ -55,6 +63,7 @@ final class SettingsStore: ObservableObject {
 
     var hasGitHubToken: Bool { !githubPat.isEmpty }
     var hasGitLabToken: Bool { !gitlabPat.isEmpty }
+    var hasBitbucketCredentials: Bool { !bitbucketUsername.isEmpty && !bitbucketAppPassword.isEmpty }
 
     // MARK: - Git profile CRUD
 

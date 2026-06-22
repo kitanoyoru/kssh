@@ -15,7 +15,9 @@ struct GitLabService {
             service: .gitlab,
             username: profile.username,
             matchedKeyCount: matchedCount,
-            avatarUrl: URL(string: profile.avatarUrl ?? "")
+            avatarUrl: URL(string: profile.avatarUrl ?? ""),
+            displayNameFull: profile.name,
+            profileUrl: profile.webUrl.flatMap(URL.init)
         )
     }
 
@@ -68,9 +70,13 @@ private struct GitLabKey: Decodable {
 private struct GitLabUser: Decodable {
     let username: String
     let avatarUrl: String?
+    let name: String?
+    let webUrl: String?
 
     enum CodingKeys: String, CodingKey {
         case username
         case avatarUrl = "avatar_url"
+        case name
+        case webUrl = "web_url"
     }
 }

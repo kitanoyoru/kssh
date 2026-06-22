@@ -15,7 +15,9 @@ struct GitHubService {
             service: .github,
             username: profile.login,
             matchedKeyCount: matchedCount,
-            avatarUrl: URL(string: profile.avatarUrl ?? "")
+            avatarUrl: URL(string: profile.avatarUrl ?? ""),
+            displayNameFull: profile.name,
+            profileUrl: profile.htmlUrl.flatMap(URL.init)
         )
     }
 
@@ -72,9 +74,13 @@ private struct GitHubKey: Decodable {
 private struct GitHubUser: Decodable {
     let login: String
     let avatarUrl: String?
+    let name: String?
+    let htmlUrl: String?
 
     enum CodingKeys: String, CodingKey {
         case login
         case avatarUrl = "avatar_url"
+        case name
+        case htmlUrl = "html_url"
     }
 }

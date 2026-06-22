@@ -3,6 +3,7 @@ import Foundation
 enum RemoteService: String, CaseIterable {
     case github = "GitHub"
     case gitlab = "GitLab"
+    case bitbucket = "Bitbucket"
 }
 
 struct RemoteUser: Equatable {
@@ -10,6 +11,11 @@ struct RemoteUser: Equatable {
     let username: String
     let matchedKeyCount: Int
     let avatarUrl: URL?
+    /// Full display name from the provider profile (e.g. "John Doe"). Nil when the
+    /// provider doesn't return one or it's the same as the username.
+    let displayNameFull: String?
+    /// Canonical profile URL — opened in the browser when the row is tapped.
+    let profileUrl: URL?
 
     var displayName: String {
         "@\(username)"

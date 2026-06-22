@@ -458,12 +458,14 @@ struct MenuBarView: View {
         // account (matchedKeyCount >= 1). The remote fetch is already scoped to the
         // active key, so a resolved profile with 0 matches means "this remote isn't for
         // the active key" → hide it. The whole section hides when neither qualifies.
-        let github = viewModel.githubUser.flatMap { $0.belongsToActiveKey ? $0 : nil }
-        let gitlab = viewModel.gitlabUser.flatMap { $0.belongsToActiveKey ? $0 : nil }
-        if github != nil || gitlab != nil {
+        let github    = viewModel.githubUser.flatMap    { $0.belongsToActiveKey ? $0 : nil }
+        let gitlab    = viewModel.gitlabUser.flatMap    { $0.belongsToActiveKey ? $0 : nil }
+        let bitbucket = viewModel.bitbucketUser.flatMap { $0.belongsToActiveKey ? $0 : nil }
+        if github != nil || gitlab != nil || bitbucket != nil {
             SectionCard(icon: "globe", title: "Remote") {
-                if let github { RemoteRow(user: github) }
-                if let gitlab { RemoteRow(user: gitlab) }
+                if let github    { RemoteRow(user: github) }
+                if let gitlab    { RemoteRow(user: gitlab) }
+                if let bitbucket { RemoteRow(user: bitbucket) }
             }
         }
     }
@@ -983,9 +985,22 @@ private struct RemoteRow: View {
                     .font(.callout)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text("active key linked")
-                    .font(.caption2)
-                    .foregroundStyle(StatusColor.active)
+                if let fullName = user.displayNameFull, !fullName.isEmpty {
+                    Text(fullName)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                if user.matchedKeyCount > 1 {
+                    Text("\(user.matchedKeyCount) keys linked")
+                        .font(.caption2)
+                        .foregroundStyle(StatusColor.active)
+                } else {
+                    Text("active key linked")
+                        .font(.caption2)
+                        .foregroundStyle(StatusColor.active)
+                }
             }
             Spacer(minLength: Spacing.sm)
             Text(user.service.rawValue)
@@ -993,6 +1008,12 @@ private struct RemoteRow: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let url = user.profileUrl {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     /// The profile avatar, with a placeholder while loading / on failure so the row

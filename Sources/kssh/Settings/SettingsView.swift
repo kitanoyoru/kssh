@@ -20,12 +20,17 @@ struct SettingsView: View {
                     Label("GitLab", systemImage: "chevron.left.forwardslash.chevron.right")
                 }
 
+            bitbucketTab
+                .tabItem {
+                    Label("Bitbucket", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+
             aboutTab
                 .tabItem {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 420, height: 280)
+        .frame(width: 420, height: 300)
     }
 
     private var generalTab: some View {
@@ -84,6 +89,25 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             } header: {
                 Text("GitLab Authentication")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var bitbucketTab: some View {
+        Form {
+            Section {
+                TextField("Username", text: $store.bitbucketUsername)
+                    .textFieldStyle(.roundedBorder)
+
+                SecureField("App Password", text: $store.bitbucketAppPassword)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("Create an App Password at bitbucket.org/account/settings/app-passwords with **Account: Read** and **SSH keys: Read** permissions.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("Bitbucket Authentication")
             }
         }
         .formStyle(.grouped)

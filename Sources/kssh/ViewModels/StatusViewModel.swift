@@ -8,6 +8,7 @@ final class StatusViewModel: ObservableObject {
     @Published var gpgIdentity: GPGIdentity?
     @Published var githubUser: RemoteUser?
     @Published var gitlabUser: RemoteUser?
+    @Published var bitbucketUser: RemoteUser?
     @Published var isLoading = false
     @Published var agentRunning = false
     @Published var agentSocket: String?
@@ -98,9 +99,11 @@ final class StatusViewModel: ObservableObject {
 
         async let githubResult = GitHubService.user(forKeys: activeKeys, pat: githubToken)
         async let gitlabResult = GitLabService.user(forKeys: activeKeys, pat: gitlabToken, instance: store.gitlabInstance)
-        let (gh, gl) = await (githubResult, gitlabResult)
+        async let bitbucketResult = BitbucketService.user(forKeys: activeKeys, username: store.bitbucketUsername, appPassword: store.bitbucketAppPassword)
+        let (gh, gl, bb) = await (githubResult, gitlabResult, bitbucketResult)
         githubUser = gh
         gitlabUser = gl
+        bitbucketUser = bb
 
         if let signingKeyId = git?.signingKey {
             gpgIdentity = GPGIdentity(secretKeys: gpg?.secretKeys ?? [], signingKeyId: signingKeyId)
