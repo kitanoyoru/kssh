@@ -488,6 +488,129 @@ final class SettingsStoreProfileTests: XCTestCase {
     }
 }
 
+final class RemoteAccountTests: XCTestCase {
+    func testEncodeDecodeRoundTrip() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        let accounts = [
+            RemoteAccount(label: "Work", instance: "gitlab.example.com"),
+            RemoteAccount(label: "Personal"),
+        ]
+        let data = SettingsStore.encodeAccounts(accounts)!
+        defaults.set(data, forKey: SettingsStore.accountsKey(for: .gitlab))
+        XCTAssertEqual(SettingsStore.loadAccounts(.gitlab, from: defaults), accounts)
+    }
+
+    func testLoadAccountsEmptyOnMissingAndGarbage() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        XCTAssertEqual(SettingsStore.loadAccounts(.github, from: defaults), [])
+        defaults.set(Data("not json".utf8), forKey: SettingsStore.accountsKey(for: .github))
+        XCTAssertEqual(SettingsStore.loadAccounts(.github, from: defaults), [])
+    }
+
+    func testAccountCap() {
+        XCTAssertEqual(SettingsStore.maxAccounts, 5)
+        XCTAssertTrue(SettingsStore.canAdd(accountCount: 0))
+        XCTAssertTrue(SettingsStore.canAdd(accountCount: SettingsStore.maxAccounts - 1))
+        XCTAssertFalse(SettingsStore.canAdd(accountCount: SettingsStore.maxAccounts))
+    }
+
+    func testKeychainKeyDerivation() {
+        XCTAssertEqual(RemoteAccount.keychainKey(service: .github, field: .pat, id: "abc"), "github.pat.abc")
+        XCTAssertEqual(RemoteAccount.keychainKey(service: .gitlab, field: .pat, id: "abc"), "gitlab.pat.abc")
+        XCTAssertEqual(RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: "abc"), "bitbucket.username.abc")
+        XCTAssertEqual(RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: "abc"), "bitbucket.apppassword.abc")
+        // Collision-free against the legacy flat keys.
+        XCTAssertNotEqual(RemoteAccount.keychainKey(service: .github, field: .pat, id: "abc"), "githubPat")
+    }
+
+    func testResolveActiveExplicit() {
+        let a = RemoteAccount(label: "A")
+        let b = RemoteAccount(label: "B")
+        XCTAssertEqual(SettingsStore.resolveActive(in: [a, b], activeId: b.id)?.id, b.id)
+    }
+
+    func testResolveActiveFallsBackToFirst() {
+        let a = RemoteAccount(label: "A")
+        let b = RemoteAccount(label: "B")
+        // No id and a stale id both fall back to the first account.
+        XCTAssertEqual(SettingsStore.resolveActive(in: [a, b], activeId: nil)?.id, a.id)
+        XCTAssertEqual(SettingsStore.resolveActive(in: [a, b], activeId: "stale")?.id, a.id)
+    }
+
+    func testResolveActiveNoneWhenEmpty() {
+        XCTAssertNil(SettingsStore.resolveActive(in: [], activeId: nil))
+        XCTAssertNil(SettingsStore.resolveActive(in: [], activeId: "x"))
+    }
+
+    func testActiveIdsPersistRoundTrip() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        let ids: [RemoteService: String] = [.github: "g1", .bitbucket: "b1"]
+        SettingsStore.persistActiveIds(ids, to: defaults)
+        XCTAssertEqual(SettingsStore.loadActiveIds(from: defaults), ids)
+    }
+
+    // MARK: - Migration
+
+    func testMigrationCreatesDefaultAccountFromLegacyKeys() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        defaults.set("gitlab.example.com", forKey: "gitlabInstance")
+        let legacy: [String: String] = [
+            "githubPat": "gh_token",
+            "gitlabPat": "gl_token",
+            "bitbucketUsername": "bbuser",
+            "bitbucketAppPassword": "bbpass",
+        ]
+        var written: [String: String] = [:]
+
+        SettingsStore.migrateLegacyAccounts(
+            in: defaults,
+            readKeychain: { legacy[$0] },
+            writeKeychain: { written[$0] = $1 }
+        )
+
+        // One Default account per service, each marked active.
+        for service in RemoteService.allCases {
+            let accounts = SettingsStore.loadAccounts(service, from: defaults)
+            XCTAssertEqual(accounts.count, 1, "\(service)")
+            XCTAssertEqual(accounts.first?.label, "Default")
+            XCTAssertEqual(SettingsStore.loadActiveIds(from: defaults)[service], accounts.first?.id)
+        }
+        // GitLab instance seeded from legacy AppStorage value.
+        XCTAssertEqual(SettingsStore.loadAccounts(.gitlab, from: defaults).first?.instance, "gitlab.example.com")
+        // Secrets written under the new derived keys.
+        let ghId = SettingsStore.loadAccounts(.github, from: defaults).first!.id
+        XCTAssertEqual(written[RemoteAccount.keychainKey(service: .github, field: .pat, id: ghId)], "gh_token")
+        let bbId = SettingsStore.loadAccounts(.bitbucket, from: defaults).first!.id
+        XCTAssertEqual(written[RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: bbId)], "bbuser")
+        XCTAssertEqual(written[RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: bbId)], "bbpass")
+        // Flag set.
+        XCTAssertTrue(defaults.bool(forKey: "migratedToMultiAccount"))
+    }
+
+    func testMigrationSkipsServicesWithEmptyLegacySecrets() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        // Only GitHub has a token; GitLab empty; Bitbucket has username but no password.
+        let legacy: [String: String] = ["githubPat": "gh", "bitbucketUsername": "u"]
+        SettingsStore.migrateLegacyAccounts(in: defaults, readKeychain: { legacy[$0] }, writeKeychain: { _, _ in })
+
+        XCTAssertEqual(SettingsStore.loadAccounts(.github, from: defaults).count, 1)
+        XCTAssertEqual(SettingsStore.loadAccounts(.gitlab, from: defaults).count, 0)
+        XCTAssertEqual(SettingsStore.loadAccounts(.bitbucket, from: defaults).count, 0)
+    }
+
+    func testMigrationIsIdempotent() {
+        let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
+        let legacy: [String: String] = ["githubPat": "gh"]
+        SettingsStore.migrateLegacyAccounts(in: defaults, readKeychain: { legacy[$0] }, writeKeychain: { _, _ in })
+        let firstId = SettingsStore.loadAccounts(.github, from: defaults).first?.id
+
+        // Second run is a no-op (flag gates it) — even if legacy keys change.
+        SettingsStore.migrateLegacyAccounts(in: defaults, readKeychain: { _ in "different" }, writeKeychain: { _, _ in })
+        XCTAssertEqual(SettingsStore.loadAccounts(.github, from: defaults).count, 1)
+        XCTAssertEqual(SettingsStore.loadAccounts(.github, from: defaults).first?.id, firstId)
+    }
+}
+
 final class GitServiceArgumentTests: XCTestCase {
     func testConfigArguments() {
         XCTAssertEqual(

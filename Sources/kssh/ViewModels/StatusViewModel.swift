@@ -66,7 +66,10 @@ final class StatusViewModel: ObservableObject {
         refreshTask = Task {
             await refresh()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
+                // Interval is user-configurable; 0 means manual-only (no polling).
+                let interval = store.refreshInterval
+                guard interval > 0 else { break }
+                try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
                 await refresh()
             }
@@ -108,9 +111,10 @@ final class StatusViewModel: ObservableObject {
         // services see no keys and report 0 matches, which hides the rows.
         let activeKeys = activeKey(in: keys).map { [$0] } ?? []
 
+        let bitbucketCreds = store.activeAccount(for: .bitbucket).flatMap { store.bitbucketCredentials(id: $0.id) }
         async let githubResult = GitHubService.user(forKeys: activeKeys, pat: githubToken)
-        async let gitlabResult = GitLabService.user(forKeys: activeKeys, pat: gitlabToken, instance: store.gitlabInstance)
-        async let bitbucketResult = BitbucketService.user(forKeys: activeKeys, username: store.bitbucketUsername, appPassword: store.bitbucketAppPassword)
+        async let gitlabResult = GitLabService.user(forKeys: activeKeys, pat: gitlabToken, instance: store.activeGitlabInstance)
+        async let bitbucketResult = BitbucketService.user(forKeys: activeKeys, username: bitbucketCreds?.username ?? "", appPassword: bitbucketCreds?.appPassword ?? "")
         let (gh, gl, bb) = await (githubResult, gitlabResult, bitbucketResult)
         githubUser = gh
         gitlabUser = gl
@@ -351,7 +355,7 @@ final class StatusViewModel: ObservableObject {
         case .github:
             result = await GitHubService.addKey(title: title, publicKey: publicKey, pat: token)
         case .gitlab:
-            result = await GitLabService.addKey(title: title, publicKey: publicKey, pat: token, instance: store.gitlabInstance)
+            result = await GitLabService.addKey(title: title, publicKey: publicKey, pat: token, instance: store.activeGitlabInstance)
         case .bitbucket:
             error = "Adding keys to Bitbucket isn't supported yet."
             return false
@@ -374,10 +378,12 @@ final class StatusViewModel: ObservableObject {
     func token(for service: RemoteService) -> String? {
         switch service {
         case .github:
-            return store.githubPat.isEmpty ? NetrcReader.password(forMachine: "github.com") : store.githubPat
+            let pat = store.activeAccount(for: .github).flatMap { store.secret(for: .github, id: $0.id) } ?? ""
+            return pat.isEmpty ? NetrcReader.password(forMachine: "github.com") : pat
         case .gitlab:
-            let host = store.gitlabInstance.isEmpty ? "gitlab.com" : store.gitlabInstance
-            return store.gitlabPat.isEmpty ? NetrcReader.password(forMachine: host) : store.gitlabPat
+            let host = store.activeGitlabInstance
+            let pat = store.activeAccount(for: .gitlab).flatMap { store.secret(for: .gitlab, id: $0.id) } ?? ""
+            return pat.isEmpty ? NetrcReader.password(forMachine: host) : pat
         case .bitbucket:
             return nil
         }
@@ -393,11 +399,12 @@ final class StatusViewModel: ObservableObject {
             return await GitHubService.profileDetail(pat: pat)
         case .gitlab:
             guard let pat = token(for: .gitlab), !pat.isEmpty else { return nil }
-            return await GitLabService.profileDetail(pat: pat, instance: store.gitlabInstance)
+            return await GitLabService.profileDetail(pat: pat, instance: store.activeGitlabInstance)
         case .bitbucket:
+            guard let creds = store.activeAccount(for: .bitbucket).flatMap({ store.bitbucketCredentials(id: $0.id) }) else { return nil }
             return await BitbucketService.profileDetail(
-                username: store.bitbucketUsername,
-                appPassword: store.bitbucketAppPassword
+                username: creds.username,
+                appPassword: creds.appPassword
             )
         }
     }
