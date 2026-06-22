@@ -611,6 +611,61 @@ final class RemoteAccountTests: XCTestCase {
     }
 }
 
+final class ContributionGraphTests: XCTestCase {
+    func testLevelBucketing() {
+        XCTAssertEqual(ContributionGraph.level(forCount: 0), 0)
+        XCTAssertEqual(ContributionGraph.level(forCount: 1), 1)
+        XCTAssertEqual(ContributionGraph.level(forCount: 2), 1)
+        XCTAssertEqual(ContributionGraph.level(forCount: 4), 2)
+        XCTAssertEqual(ContributionGraph.level(forCount: 7), 3)
+        XCTAssertEqual(ContributionGraph.level(forCount: 50), 4)
+    }
+
+    func testRecentTrimsToLastNWeeks() {
+        let day = ContributionDay(date: Date(timeIntervalSince1970: 0), count: 0, level: 0)
+        let weeks = Array(repeating: [day], count: 52)
+        let graph = ContributionGraph(weeks: weeks)
+        XCTAssertEqual(graph.recent(weeks: 13).weeks.count, 13)
+        // Fewer weeks than requested → unchanged.
+        XCTAssertEqual(ContributionGraph(weeks: Array(weeks.prefix(5))).recent(weeks: 13).weeks.count, 5)
+    }
+
+    func testTotalContributions() {
+        let weeks = [
+            [day(1), day(2)],
+            [day(3)],
+        ]
+        XCTAssertEqual(ContributionGraph(weeks: weeks).totalContributions, 6)
+    }
+
+    func testParseContributionCalendar() {
+        let json = """
+        {"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"weeks":[
+        {"contributionDays":[{"date":"2026-01-04","contributionCount":0},{"date":"2026-01-05","contributionCount":3}]},
+        {"contributionDays":[{"date":"2026-01-11","contributionCount":12}]}
+        ]}}}}}
+        """
+        let graph = GitHubService.parseContributionCalendar(Data(json.utf8))
+        XCTAssertNotNil(graph)
+        XCTAssertEqual(graph?.weeks.count, 2)
+        XCTAssertEqual(graph?.weeks[0].count, 2)
+        XCTAssertEqual(graph?.weeks[0][1].count, 3)
+        XCTAssertEqual(graph?.weeks[0][1].level, 2)   // 3 → level 2
+        XCTAssertEqual(graph?.weeks[1][0].level, 4)   // 12 → level 4
+        XCTAssertEqual(graph?.totalContributions, 15)
+    }
+
+    func testParseContributionCalendarRejectsErrorsAndGarbage() {
+        XCTAssertNil(GitHubService.parseContributionCalendar(Data("not json".utf8)))
+        let errorPayload = Data(#"{"errors":[{"message":"Bad credentials"}]}"#.utf8)
+        XCTAssertNil(GitHubService.parseContributionCalendar(errorPayload))
+    }
+
+    private func day(_ count: Int) -> ContributionDay {
+        ContributionDay(date: Date(timeIntervalSince1970: 0), count: count, level: ContributionGraph.level(forCount: count))
+    }
+}
+
 final class GitServiceArgumentTests: XCTestCase {
     func testConfigArguments() {
         XCTAssertEqual(

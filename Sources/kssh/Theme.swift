@@ -90,6 +90,31 @@ struct CountBadge: View {
 
 // MARK: - Button Styles
 
+/// A proper primary call-to-action button for FORM screens (Generate key, Add account,
+/// Save…): a centered label on an accent fill, visually distinct from the list-style
+/// `MenuActionButtonStyle` rows. Use this for the single primary action on a screen.
+struct PrimaryActionButtonStyle: ButtonStyle {
+    var role: ButtonRole? = nil
+    /// Reads the button's own `.disabled` state so the fill dims correctly.
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let base: Color = role == .destructive ? StatusColor.destructive : Color.accentColor
+        return configuration.label
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Spacing.sm)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.row + 2, style: .continuous)
+                    .fill(base.opacity(isEnabled ? (configuration.isPressed ? 0.78 : 1) : 0.35))
+            )
+            .contentShape(Rectangle())
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 /// A full-width action row with smooth hover highlight and press feedback.
 struct MenuActionButtonStyle: ButtonStyle {
     var role: ButtonRole? = nil

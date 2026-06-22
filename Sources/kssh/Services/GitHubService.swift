@@ -44,6 +44,66 @@ struct GitHubService {
         )
     }
 
+    /// The viewer's contribution calendar (last year) via the GraphQL API. Fetched lazily
+    /// for the detail screen. Returns nil on empty token, non-200, or any GraphQL error so
+    /// the caller simply hides the graph — it must never block the rest of the screen.
+    static func contributionGraph(pat: String) async -> ContributionGraph? {
+        guard !pat.isEmpty else { return nil }
+        guard let data = await postGraphQL(query: contributionQuery, pat: pat) else { return nil }
+        return parseContributionCalendar(data)
+    }
+
+    private static let contributionQuery = """
+    query { viewer { contributionsCollection { contributionCalendar { \
+    weeks { contributionDays { date contributionCount } } } } } }
+    """
+
+    /// Pure, testable decoder for the GraphQL contribution-calendar response. Maps each
+    /// day's count into a 0–4 level via `ContributionGraph.level(forCount:)`. Returns nil
+    /// if the payload is missing the expected shape or carries `errors`.
+    static func parseContributionCalendar(_ data: Data) -> ContributionGraph? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        if root["errors"] != nil { return nil }
+        guard let dataObj = root["data"] as? [String: Any],
+              let viewer = dataObj["viewer"] as? [String: Any],
+              let collection = viewer["contributionsCollection"] as? [String: Any],
+              let calendar = collection["contributionCalendar"] as? [String: Any],
+              let weeksRaw = calendar["weeks"] as? [[String: Any]] else { return nil }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+
+        let weeks: [[ContributionDay]] = weeksRaw.map { week in
+            let days = (week["contributionDays"] as? [[String: Any]]) ?? []
+            return days.compactMap { day -> ContributionDay? in
+                guard let dateStr = day["date"] as? String,
+                      let date = formatter.date(from: dateStr),
+                      let count = day["contributionCount"] as? Int else { return nil }
+                return ContributionDay(date: date, count: count, level: ContributionGraph.level(forCount: count))
+            }
+        }
+        return ContributionGraph(weeks: weeks)
+    }
+
+    /// POSTs a GraphQL query to the GitHub v4 endpoint. Sibling to `get(_:pat:)` for the
+    /// REST v3 calls; reuses the same Bearer/User-Agent headers. Body is `{"query": …}`.
+    private static func postGraphQL(query: String, pat: String) async -> Data? {
+        guard let url = URL(string: "https://api.github.com/graphql") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(pat)", forHTTPHeaderField: "Authorization")
+        request.setValue("kssh", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["query": query])
+        request.timeoutInterval = 10
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            return nil
+        }
+        return data
+    }
+
     /// Counts local SSH keys that are registered on the account. Best-effort: returns 0
     /// if the keys endpoint fails (it must not block showing the resolved profile).
     private static func matchedKeyCount(forKeys localKeys: [SSHKey], pat: String) async -> Int {

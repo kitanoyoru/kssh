@@ -45,6 +45,26 @@ final class StatusViewModel: ObservableObject {
     /// The remote service the active key is currently being uploaded to, if any.
     @Published var addingKeyToRemote: RemoteService?
 
+    /// Remote-account lifecycle busy state (mirrors the SSH-key flags). Each is keyed by
+    /// the account id (or service, for add) so a row can show its own spinner.
+    @Published var switchingAccount: String?
+    @Published var mutatingAccount: String?
+    @Published var addingAccount: RemoteService?
+    @Published var testingAccount: String?
+    /// Last delete/rename/secret-update or add error, surfaced inline on the screen.
+    @Published var accountActionError: String?
+    /// Per-account validation result from `testAccount`, keyed by account id.
+    @Published var accountTestResult: [String: AccountTestState] = [:]
+    /// Resolved profile (avatar + username) per account id, populated each refresh so every
+    /// row shows its own avatar/username and any row can open its detail screen.
+    @Published var accountUsers: [String: RemoteUser] = [:]
+
+    /// Outcome of a per-account "Test" (validate credential) action.
+    enum AccountTestState: Equatable {
+        case valid(String)   // associated value: the resolved display name / username
+        case invalid
+    }
+
     /// True while an ssh-agent is being started (Enable button busy state).
     @Published var startingAgent = false
 
@@ -124,7 +144,53 @@ final class StatusViewModel: ObservableObject {
             gpgIdentity = GPGIdentity(secretKeys: gpg?.secretKeys ?? [], signingKeyId: signingKeyId)
         }
 
+        await resolveAccountUsers(activeKeys: activeKeys)
+
         isLoading = false
+    }
+
+    /// Resolves a `RemoteUser` (avatar + username + key-match) for EVERY configured account,
+    /// using each account's own secret — so every row in the Remote list shows the right
+    /// profile, not just the active one. Cached in `accountUsers` by account id.
+    /// `matchedKeyCount` is computed against the active key, so a positive count marks the
+    /// account that holds the currently-active SSH key.
+    private func resolveAccountUsers(activeKeys: [SSHKey]) async {
+        let refs: [(service: RemoteService, account: RemoteAccount)] =
+            RemoteService.allCases.flatMap { service in
+                store.accounts(for: service).map { (service, $0) }
+            }
+
+        let resolved = await withTaskGroup(of: (String, RemoteUser?).self) { group -> [String: RemoteUser] in
+            for ref in refs {
+                let service = ref.service
+                let account = ref.account
+                group.addTask { [self] in
+                    (account.id, await user(for: service, account: account, activeKeys: activeKeys))
+                }
+            }
+            var map: [String: RemoteUser] = [:]
+            for await (id, user) in group where user != nil {
+                map[id] = user
+            }
+            return map
+        }
+        accountUsers = resolved
+    }
+
+    /// Resolves the profile a specific account's credential belongs to.
+    private func user(for service: RemoteService, account: RemoteAccount, activeKeys: [SSHKey]) async -> RemoteUser? {
+        switch service {
+        case .github:
+            let pat = store.secret(for: .github, id: account.id) ?? ""
+            return await GitHubService.user(forKeys: activeKeys, pat: pat)
+        case .gitlab:
+            let pat = store.secret(for: .gitlab, id: account.id) ?? ""
+            let host = (account.instance?.isEmpty == false) ? account.instance! : "gitlab.com"
+            return await GitLabService.user(forKeys: activeKeys, pat: pat, instance: host)
+        case .bitbucket:
+            guard let creds = store.bitbucketCredentials(id: account.id) else { return nil }
+            return await BitbucketService.user(forKeys: activeKeys, username: creds.username, appPassword: creds.appPassword)
+        }
     }
 
     private func loadSSH() async -> [SSHKey] {
@@ -389,24 +455,156 @@ final class StatusViewModel: ObservableObject {
         }
     }
 
-    /// Fetches extended profile detail for a remote, on demand (when its detail screen
-    /// opens) so the per-refresh path stays cheap. Routes to the right service using the
-    /// same credential resolution as `refresh()`. Returns nil on missing creds or failure.
-    func remoteProfileDetail(for service: RemoteService) async -> RemoteProfileDetail? {
+    /// Extended profile detail for a SPECIFIC account, fetched lazily when its detail screen
+    /// opens. Uses that account's own secret so any account (not just the active one) opens.
+    func remoteProfileDetail(for service: RemoteService, account: RemoteAccount) async -> RemoteProfileDetail? {
         switch service {
         case .github:
-            guard let pat = token(for: .github), !pat.isEmpty else { return nil }
-            return await GitHubService.profileDetail(pat: pat)
+            let pat = store.secret(for: .github, id: account.id) ?? ""
+            return pat.isEmpty ? nil : await GitHubService.profileDetail(pat: pat)
         case .gitlab:
-            guard let pat = token(for: .gitlab), !pat.isEmpty else { return nil }
-            return await GitLabService.profileDetail(pat: pat, instance: store.activeGitlabInstance)
+            let pat = store.secret(for: .gitlab, id: account.id) ?? ""
+            let host = (account.instance?.isEmpty == false) ? account.instance! : "gitlab.com"
+            return pat.isEmpty ? nil : await GitLabService.profileDetail(pat: pat, instance: host)
         case .bitbucket:
-            guard let creds = store.activeAccount(for: .bitbucket).flatMap({ store.bitbucketCredentials(id: $0.id) }) else { return nil }
-            return await BitbucketService.profileDetail(
-                username: creds.username,
-                appPassword: creds.appPassword
-            )
+            guard let creds = store.bitbucketCredentials(id: account.id) else { return nil }
+            return await BitbucketService.profileDetail(username: creds.username, appPassword: creds.appPassword)
         }
+    }
+
+    /// The contribution calendar for a specific GitHub account (nil for other services /
+    /// failures), using that account's secret.
+    func contributionGraph(for service: RemoteService, account: RemoteAccount) async -> ContributionGraph? {
+        guard service == .github else { return nil }
+        let pat = store.secret(for: .github, id: account.id) ?? ""
+        return pat.isEmpty ? nil : await GitHubService.contributionGraph(pat: pat)
+    }
+
+    // MARK: - Remote account lifecycle
+    //
+    // Thin wrappers over the SettingsStore CRUD that add the same guard+defer busy-state
+    // and post-mutation refresh as the SSH-key actions. The store does the Keychain work.
+
+    /// Makes `account` the active one for its service, then refreshes derived remote state.
+    func switchAccount(_ account: RemoteAccount, for service: RemoteService) async {
+        guard switchingAccount == nil else { return }
+        switchingAccount = account.id
+        error = nil
+        defer { switchingAccount = nil }
+        store.setActive(id: account.id, for: service)
+        await refresh()
+    }
+
+    /// Adds a GitHub/GitLab account (PAT). Returns true on success.
+    func addAccount(label: String, secret: String, instance: String?, for service: RemoteService) async -> Bool {
+        guard addingAccount == nil else { return false }
+        addingAccount = service
+        accountActionError = nil
+        defer { addingAccount = nil }
+        guard store.addAccount(label: label, secret: secret, instance: instance, for: service) != nil else {
+            accountActionError = "Couldn’t add the account (limit reached?)."
+            return false
+        }
+        await refresh()
+        return true
+    }
+
+    /// Adds a Bitbucket account (username + app password). Returns true on success.
+    func addBitbucketAccount(label: String, username: String, appPassword: String) async -> Bool {
+        guard addingAccount == nil else { return false }
+        addingAccount = .bitbucket
+        accountActionError = nil
+        defer { addingAccount = nil }
+        guard store.addBitbucketAccount(label: label, username: username, appPassword: appPassword) != nil else {
+            accountActionError = "Couldn’t add the account (limit reached?)."
+            return false
+        }
+        await refresh()
+        return true
+    }
+
+    /// Renames an account and (optionally) updates its secret/instance in one save.
+    /// `secret`/`instance`/`username` nil means "leave unchanged". Returns true on success.
+    func saveAccount(
+        _ account: RemoteAccount,
+        for service: RemoteService,
+        label: String,
+        secret: String? = nil,
+        instance: String? = nil,
+        username: String? = nil,
+        appPassword: String? = nil
+    ) async -> Bool {
+        guard mutatingAccount == nil else { return false }
+        mutatingAccount = account.id
+        accountActionError = nil
+        defer { mutatingAccount = nil }
+
+        store.renameAccount(id: account.id, to: label, for: service)
+        if let instance, service == .gitlab {
+            store.updateInstance(id: account.id, instance: instance, for: service)
+        }
+        if service == .bitbucket {
+            if let username, let appPassword {
+                store.updateBitbucketSecret(id: account.id, username: username, appPassword: appPassword)
+            }
+        } else if let secret, !secret.isEmpty {
+            store.updateSecret(id: account.id, secret: secret, for: service)
+        }
+        await refresh()
+        return true
+    }
+
+    /// Deletes an account (purging its Keychain entries via the store) and refreshes.
+    func deleteAccount(_ account: RemoteAccount, for service: RemoteService) async {
+        guard mutatingAccount == nil else { return }
+        mutatingAccount = account.id
+        accountActionError = nil
+        defer { mutatingAccount = nil }
+        store.deleteAccount(id: account.id, for: service)
+        notice = "Removed \(account.displayLabel) from \(service.rawValue)."
+        await refresh()
+    }
+
+    /// Validates an account's stored credential by calling the provider's profile endpoint
+    /// (non-nil result = valid). Stores the outcome in `accountTestResult[account.id]`.
+    func testAccount(_ account: RemoteAccount, for service: RemoteService) async {
+        guard testingAccount == nil else { return }
+        testingAccount = account.id
+        defer { testingAccount = nil }
+
+        let detail: RemoteProfileDetail?
+        switch service {
+        case .github:
+            let pat = store.secret(for: .github, id: account.id) ?? ""
+            detail = pat.isEmpty ? nil : await GitHubService.profileDetail(pat: pat)
+        case .gitlab:
+            let pat = store.secret(for: .gitlab, id: account.id) ?? ""
+            let host = (account.instance?.isEmpty == false) ? account.instance! : "gitlab.com"
+            detail = pat.isEmpty ? nil : await GitLabService.profileDetail(pat: pat, instance: host)
+        case .bitbucket:
+            if let creds = store.bitbucketCredentials(id: account.id) {
+                detail = await BitbucketService.profileDetail(username: creds.username, appPassword: creds.appPassword)
+            } else {
+                detail = nil
+            }
+        }
+        accountTestResult[account.id] = detail.map { .valid($0.fullName ?? "Valid") } ?? .invalid
+    }
+
+    /// The resolved profile (avatar + username) for an account, if it was reachable on the
+    /// last refresh. Every row uses this for its avatar/username and for opening detail.
+    func accountUser(_ account: RemoteAccount) -> RemoteUser? {
+        accountUsers[account.id]
+    }
+
+    /// Whether the active SSH key is registered on this account (drives the "linked" dot).
+    func isKeyLinked(_ account: RemoteAccount) -> Bool {
+        accountUsers[account.id]?.belongsToActiveKey ?? false
+    }
+
+    /// Whether `account` is the active one for its service.
+    func isActiveAccount(_ account: RemoteAccount, for service: RemoteService) -> Bool {
+        store.activeAccount(for: service)?.id == account.id
     }
 
     /// A unique-ish backup subdirectory name. `Date()` is intentionally read here (the app

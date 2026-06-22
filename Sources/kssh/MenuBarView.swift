@@ -11,12 +11,16 @@ private enum Route: Equatable {
     case createGPGKey
     case createSSHKey
     case renameKey(identity: SSHIdentity)
-    case remoteDetail(user: RemoteUser)
+    case remoteDetail(user: RemoteUser, service: RemoteService, account: RemoteAccount)
+    case addAccount(service: RemoteService?)   // nil = pick service on the screen
+    case editAccount(service: RemoteService, account: RemoteAccount)
 
     /// Where the back button returns to.
     var parent: Route {
         switch self {
-        case .main, .profilesList, .createGPGKey, .createSSHKey, .renameKey, .remoteDetail: return .main
+        case .main, .profilesList, .createGPGKey, .createSSHKey, .renameKey, .remoteDetail,
+             .addAccount, .editAccount:
+            return .main
         case .profileForm: return .profilesList
         }
     }
@@ -29,8 +33,57 @@ private enum Route: Equatable {
         case .createGPGKey: return "Create GPG Key"
         case .createSSHKey: return "Generate SSH Key"
         case .renameKey: return "Rename Key"
-        case .remoteDetail(let user): return user.service.rawValue
+        case .remoteDetail(let user, _, _): return user.service.rawValue
+        case .addAccount(let service): return service.map { "Add \($0.rawValue) Account" } ?? "Add Account"
+        case .editAccount: return "Edit Account"
         }
+    }
+}
+
+/// A service + account pair, identified by the account id, for driving the delete dialog
+/// and the flat remote account list.
+private struct AccountRef: Identifiable, Equatable {
+    let service: RemoteService
+    let account: RemoteAccount
+    var id: String { account.id }
+}
+
+extension RemoteService {
+    /// The provider's brand color, used as the lettermark badge fill.
+    var brandColor: Color {
+        switch self {
+        case .github: return Color(red: 0.14, green: 0.16, blue: 0.18)   // GitHub near-black
+        case .gitlab: return Color(red: 0.89, green: 0.36, blue: 0.16)   // GitLab orange
+        case .bitbucket: return Color(red: 0.16, green: 0.40, blue: 0.86) // Bitbucket blue
+        }
+    }
+
+    /// Two-letter monogram for the lettermark badge (SF Symbols has no brand logos, and
+    /// hand-drawn vector marks were inaccurate — a brand-colored monogram is honest and clear).
+    var monogram: String {
+        switch self {
+        case .github: return "GH"
+        case .gitlab: return "GL"
+        case .bitbucket: return "BB"
+        }
+    }
+}
+
+/// A small rounded-square badge with the provider's monogram in its brand color.
+private struct ProviderBadge: View {
+    let service: RemoteService
+    var side: CGFloat = 18
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(service.brandColor)
+            .frame(width: side, height: side)
+            .overlay(
+                Text(service.monogram)
+                    .font(.system(size: side * 0.42, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            )
+            .accessibilityLabel(service.rawValue)
     }
 }
 
@@ -41,6 +94,8 @@ struct MenuBarView: View {
     @State private var route: Route = .main
     /// The identity pending delete confirmation (drives the destructive dialog).
     @State private var keyPendingDelete: SSHIdentity?
+    /// The remote account pending delete confirmation (service + account).
+    @State private var accountPendingDelete: AccountRef?
 
     var body: some View {
         ZStack {
@@ -79,9 +134,23 @@ struct MenuBarView: View {
                     }
                 }
                 .transition(.move(edge: .trailing))
-            case .remoteDetail(let user):
+            case .remoteDetail(let user, let service, let account):
                 routeScreen {
-                    RemoteDetailScreen(viewModel: viewModel, user: user)
+                    RemoteDetailScreen(viewModel: viewModel, user: user, service: service, account: account)
+                }
+                .transition(.move(edge: .trailing))
+            case .addAccount(let service):
+                routeScreen {
+                    AddAccountScreen(viewModel: viewModel, service: service) {
+                        withAnimation { route = .main }
+                    }
+                }
+                .transition(.move(edge: .trailing))
+            case .editAccount(let service, let account):
+                routeScreen {
+                    EditAccountScreen(viewModel: viewModel, service: service, account: account) {
+                        withAnimation { route = .main }
+                    }
                 }
                 .transition(.move(edge: .trailing))
             }
@@ -120,13 +189,18 @@ struct MenuBarView: View {
             if viewModel.isLoading && viewModel.sshKeys.isEmpty {
                 loadingView
             } else if !viewModel.agentRunning {
-                // Agent off: hide every section and offer a single Enable action.
+                // Agent off: the SSH-dependent sections need the agent, so offer a single
+                // Enable action in their place — but remote account management is
+                // independent of the agent, so keep the Remote section available.
                 VStack(spacing: Spacing.sm) {
                     agentOffSection
+                    remoteSection
                 }
                 .padding(.horizontal, Spacing.md)
                 .padding(.vertical, Spacing.md)
             } else {
+                // Height is controlled by collapsible sections (Keys open by default; Git
+                // is compact; GPG collapsed; Remote collapsible) — no scrolling.
                 VStack(spacing: Spacing.sm) {
                     keysSection
                     gitSection
@@ -305,6 +379,7 @@ struct MenuBarView: View {
         SectionCard(
             icon: "key.horizontal",
             title: "Keys",
+            collapsible: true,
             accessory: {
                 if !viewModel.availableIdentities.isEmpty {
                     CountBadge(count: viewModel.availableIdentities.count)
@@ -491,6 +566,8 @@ struct MenuBarView: View {
         SectionCard(
             icon: "lock.shield",
             title: "GPG",
+            collapsible: true,
+            expandedByDefault: false,
             accessory: {
                 if let git = viewModel.gitIdentity {
                     StatusPill(
@@ -550,22 +627,105 @@ struct MenuBarView: View {
 
     // MARK: - Remote
 
+    /// The Remote section is the management surface for PAT/app-password accounts, modeled
+    /// on `keysSection`: every configured account per service is listed (NOT gated by
+    /// active-key match), with an active radio, a context menu (test/edit/set-active/delete),
+    /// and a per-service add button. The "active key linked" badge + profile tap-through is
+    /// an additive indicator on whichever account is active and key-linked.
     @ViewBuilder
     private var remoteSection: some View {
-        // Show a service's row only when the ACTIVE SSH key is registered on that
-        // account (matchedKeyCount >= 1). The remote fetch is already scoped to the
-        // active key, so a resolved profile with 0 matches means "this remote isn't for
-        // the active key" → hide it. The whole section hides when neither qualifies.
-        let github    = viewModel.githubUser.flatMap    { $0.belongsToActiveKey ? $0 : nil }
-        let gitlab    = viewModel.gitlabUser.flatMap    { $0.belongsToActiveKey ? $0 : nil }
-        let bitbucket = viewModel.bitbucketUser.flatMap { $0.belongsToActiveKey ? $0 : nil }
-        if github != nil || gitlab != nil || bitbucket != nil {
-            SectionCard(icon: "globe", title: "Remote") {
-                if let github    { RemoteRow(user: github) { withAnimation { route = .remoteDetail(user: github) } } }
-                if let gitlab    { RemoteRow(user: gitlab) { withAnimation { route = .remoteDetail(user: gitlab) } } }
-                if let bitbucket { RemoteRow(user: bitbucket) { withAnimation { route = .remoteDetail(user: bitbucket) } } }
-            }
+        // Flat list of ALL accounts across services (each row carries a provider glyph), so
+        // there are no per-service headers and a single "Add account…" button. A fresh
+        // install shows just the empty hint + the add button.
+        let all: [AccountRef] = RemoteService.allCases.flatMap { service in
+            viewModel.store.accounts(for: service).map { AccountRef(service: service, account: $0) }
         }
+        SectionCard(
+            icon: "globe",
+            title: "Remote",
+            collapsible: true,
+            accessory: { if !all.isEmpty { CountBadge(count: all.count) } }
+        ) {
+            if all.isEmpty {
+                EmptyRow(text: "No accounts yet.")
+            }
+            ForEach(all) { ref in
+                AccountSwitchRow(
+                    account: ref.account,
+                    service: ref.service,
+                    isActive: viewModel.isActiveAccount(ref.account, for: ref.service),
+                    isSwitching: viewModel.switchingAccount == ref.account.id,
+                    isTesting: viewModel.testingAccount == ref.account.id,
+                    disabled: viewModel.switchingAccount != nil || viewModel.mutatingAccount != nil,
+                    testResult: viewModel.accountTestResult[ref.account.id],
+                    user: viewModel.accountUser(ref.account),
+                    onSwitch: { Task { await viewModel.switchAccount(ref.account, for: ref.service) } },
+                    onOpen: { user in withAnimation { route = .remoteDetail(user: user, service: ref.service, account: ref.account) } }
+                )
+                .contextMenu { accountContextMenu(ref.account, service: ref.service) }
+            }
+            addAccountButton
+        }
+        .confirmationDialog(
+            "Remove \(accountPendingDelete?.account.displayLabel ?? "account")?",
+            isPresented: Binding(
+                get: { accountPendingDelete != nil },
+                set: { if !$0 { accountPendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let ref = accountPendingDelete {
+                    Task { await viewModel.deleteAccount(ref.account, for: ref.service) }
+                }
+                accountPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { accountPendingDelete = nil }
+        } message: {
+            Text("The token is deleted from the Keychain. This doesn’t revoke it on the provider.")
+        }
+    }
+
+    /// Single add button → the add screen, which starts with a service picker.
+    private var addAccountButton: some View {
+        Button(action: { withAnimation { route = .addAccount(service: nil) } }) {
+            HStack(spacing: Spacing.xs + 1) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Add account…")
+                    .font(.caption)
+                Spacer()
+            }
+            .foregroundStyle(.tint)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, Spacing.xxs)
+        .accessibilityLabel("Add a remote account")
+    }
+
+    /// Per-account context menu: test, edit, set-active, delete.
+    @ViewBuilder
+    private func accountContextMenu(_ account: RemoteAccount, service: RemoteService) -> some View {
+        Button { Task { await viewModel.testAccount(account, for: service) } } label: {
+            Label("Test connection", systemImage: "checkmark.shield")
+        }
+        .disabled(viewModel.testingAccount != nil)
+        Button { withAnimation { route = .editAccount(service: service, account: account) } } label: {
+            Label("Edit…", systemImage: "pencil")
+        }
+        .disabled(viewModel.mutatingAccount != nil)
+        if !viewModel.isActiveAccount(account, for: service) {
+            Button { Task { await viewModel.switchAccount(account, for: service) } } label: {
+                Label("Set active", systemImage: "largecircle.fill.circle")
+            }
+            .disabled(viewModel.switchingAccount != nil)
+        }
+        Divider()
+        Button(role: .destructive) { accountPendingDelete = AccountRef(service: service, account: account) } label: {
+            Label("Remove…", systemImage: "trash")
+        }
+        .disabled(viewModel.mutatingAccount != nil)
     }
 
     // MARK: - Actions
@@ -637,6 +797,16 @@ private func actionLabelRow(_ title: String, systemImage: String) -> some View {
     }
 }
 
+/// Centered icon+title for a primary CTA, used with `PrimaryActionButtonStyle` on form
+/// screens (no leading `Spacer`, so the label sits centered on the filled button).
+private func primaryActionLabel(_ title: String, systemImage: String) -> some View {
+    HStack(spacing: Spacing.xs + 2) {
+        Image(systemName: systemImage)
+            .font(.system(size: 12, weight: .semibold))
+        Text(title)
+    }
+}
+
 /// Back header for detail routes: a chevron button + title, mirroring the main header.
 private struct DetailHeader: View {
     let title: String
@@ -701,9 +871,9 @@ private struct ProfileFormScreen: View {
                 }
                 onDone()
             } label: {
-                actionLabelRow(editing == nil ? "Add profile" : "Save changes", systemImage: "checkmark.circle")
+                primaryActionLabel(editing == nil ? "Add profile" : "Save changes", systemImage: "checkmark.circle")
             }
-            .buttonStyle(MenuActionButtonStyle())
+            .buttonStyle(PrimaryActionButtonStyle())
             .disabled(!canSave)
         }
     }
@@ -761,9 +931,9 @@ private struct CreateGPGScreen: View {
                         if ok { onDone() }
                     }
                 } label: {
-                    actionLabelRow("Create key", systemImage: "plus.circle")
+                    primaryActionLabel("Create key", systemImage: "plus.circle")
                 }
-                .buttonStyle(MenuActionButtonStyle())
+                .buttonStyle(PrimaryActionButtonStyle())
                 .disabled(!canCreate)
             }
         }
@@ -822,9 +992,9 @@ private struct CreateSSHKeyScreen: View {
                         if ok { onDone() }
                     }
                 } label: {
-                    actionLabelRow("Generate key", systemImage: "plus.circle")
+                    primaryActionLabel("Generate key", systemImage: "plus.circle")
                 }
-                .buttonStyle(MenuActionButtonStyle())
+                .buttonStyle(PrimaryActionButtonStyle())
                 .disabled(!canCreate)
             }
         }
@@ -878,11 +1048,170 @@ private struct RenameKeyScreen: View {
                         if ok { onDone() }
                     }
                 } label: {
-                    actionLabelRow("Rename", systemImage: "checkmark.circle")
+                    primaryActionLabel("Rename", systemImage: "checkmark.circle")
                 }
-                .buttonStyle(MenuActionButtonStyle())
+                .buttonStyle(PrimaryActionButtonStyle())
                 .disabled(!canSave)
             }
+        }
+    }
+}
+
+/// Add a remote account in the popover. If no service is preselected, a compact segmented
+/// picker chooses one first. Fields branch on service: GitHub/GitLab take a label + PAT
+/// (GitLab also an instance); Bitbucket takes label + username + app password.
+private struct AddAccountScreen: View {
+    @ObservedObject var viewModel: StatusViewModel
+    let onDone: () -> Void
+
+    @State private var service: RemoteService
+    @State private var label = ""
+    @State private var instance = "gitlab.com"
+    @State private var secret = ""
+    @State private var username = ""
+
+    init(viewModel: StatusViewModel, service: RemoteService?, onDone: @escaping () -> Void) {
+        self.viewModel = viewModel
+        self.onDone = onDone
+        _service = State(initialValue: service ?? .github)
+    }
+
+    private var canAdd: Bool {
+        guard !label.isEmpty, viewModel.addingAccount == nil else { return false }
+        if service == .bitbucket { return !username.isEmpty && !secret.isEmpty }
+        return !secret.isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Picker("Provider", selection: $service) {
+                ForEach(RemoteService.allCases, id: \.self) { s in
+                    Text(s.rawValue).tag(s)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            TextField("Label (e.g. Work)", text: $label).textFieldStyle(.roundedBorder)
+
+            if service == .gitlab {
+                TextField("Instance", text: $instance).textFieldStyle(.roundedBorder)
+            }
+            if service == .bitbucket {
+                TextField("Username", text: $username).textFieldStyle(.roundedBorder)
+                SecureField("App Password", text: $secret).textFieldStyle(.roundedBorder)
+            } else {
+                SecureField("Personal Access Token", text: $secret).textFieldStyle(.roundedBorder)
+            }
+
+            Text(scopesHint).font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let err = viewModel.accountActionError {
+                Text(err).font(.caption).foregroundStyle(StatusColor.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: Spacing.sm) {
+                if viewModel.addingAccount == service { ProgressView().controlSize(.small) }
+                Button {
+                    Task {
+                        let ok: Bool
+                        if service == .bitbucket {
+                            ok = await viewModel.addBitbucketAccount(label: label, username: username, appPassword: secret)
+                        } else {
+                            ok = await viewModel.addAccount(label: label, secret: secret,
+                                                            instance: service == .gitlab ? instance : nil, for: service)
+                        }
+                        if ok { onDone() }
+                    }
+                } label: {
+                    primaryActionLabel("Add account", systemImage: "plus.circle")
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+                .disabled(!canAdd)
+            }
+        }
+    }
+
+    private var scopesHint: String {
+        switch service {
+        case .github: return "github.com/settings/tokens — read:public_key, read:user (and read:user for the graph)."
+        case .gitlab: return "\(instance)/-/user_settings/personal_access_tokens — read_api."
+        case .bitbucket: return "bitbucket.org App Password — Account: Read, SSH keys: Read."
+        }
+    }
+}
+
+/// Edit a remote account: rename + replace the secret (and GitLab instance). Secrets load
+/// from the Keychain on appear and are written only on Save. Ports the Settings `AccountEditor`.
+private struct EditAccountScreen: View {
+    @ObservedObject var viewModel: StatusViewModel
+    let service: RemoteService
+    let account: RemoteAccount
+    let onDone: () -> Void
+
+    @State private var label = ""
+    @State private var instance = ""
+    @State private var secret = ""
+    @State private var username = ""
+
+    private var canSave: Bool { !label.isEmpty && viewModel.mutatingAccount == nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            TextField("Label", text: $label).textFieldStyle(.roundedBorder)
+
+            if service == .gitlab {
+                TextField("Instance", text: $instance).textFieldStyle(.roundedBorder)
+            }
+            if service == .bitbucket {
+                TextField("Username", text: $username).textFieldStyle(.roundedBorder)
+                SecureField("App Password", text: $secret).textFieldStyle(.roundedBorder)
+            } else {
+                SecureField("Personal Access Token", text: $secret).textFieldStyle(.roundedBorder)
+            }
+
+            Text("Leave the token unchanged to keep the stored one.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            if let err = viewModel.accountActionError {
+                Text(err).font(.caption).foregroundStyle(StatusColor.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: Spacing.sm) {
+                if viewModel.mutatingAccount == account.id { ProgressView().controlSize(.small) }
+                Button {
+                    Task {
+                        let ok = await viewModel.saveAccount(
+                            account, for: service, label: label,
+                            secret: service == .bitbucket ? nil : secret,
+                            instance: service == .gitlab ? instance : nil,
+                            username: service == .bitbucket ? username : nil,
+                            appPassword: service == .bitbucket ? secret : nil
+                        )
+                        if ok { onDone() }
+                    }
+                } label: {
+                    primaryActionLabel("Save", systemImage: "checkmark.circle")
+                }
+                .buttonStyle(PrimaryActionButtonStyle())
+                .disabled(!canSave)
+            }
+        }
+        .onAppear(perform: load)
+    }
+
+    private func load() {
+        label = account.label
+        instance = account.instance ?? ""
+        if service == .bitbucket {
+            let creds = viewModel.store.bitbucketCredentials(id: account.id)
+            username = creds?.username ?? ""
+            secret = creds?.appPassword ?? ""
+        } else {
+            secret = viewModel.store.secret(for: service, id: account.id) ?? ""
         }
     }
 }
@@ -895,12 +1224,17 @@ private struct RenameKeyScreen: View {
 private struct RemoteDetailScreen: View {
     @ObservedObject var viewModel: StatusViewModel
     let user: RemoteUser
+    let service: RemoteService
+    let account: RemoteAccount
 
     @State private var detail: RemoteProfileDetail?
     @State private var loading = true
+    /// GitHub contribution calendar, loaded independently of the profile so a slow/failed
+    /// graph never delays the rest of the screen. Nil = not loaded / unavailable.
+    @State private var graph: ContributionGraph?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
+        VStack(alignment: .leading, spacing: Spacing.md) {
             header
 
             if loading {
@@ -908,62 +1242,95 @@ private struct RemoteDetailScreen: View {
                     ProgressView().controlSize(.small)
                     Text("Loading profile…").font(.caption).foregroundStyle(.secondary)
                 }
-                .padding(.vertical, Spacing.xs)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, Spacing.md)
             } else if let detail {
                 stats(detail)
+
                 if let bio = detail.bio, !bio.isEmpty {
                     Text(bio)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                        .foregroundStyle(.primary.opacity(0.85))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                fields(detail)
+
+                // Only show the graph when there's actual activity — an all-grey grid for
+                // an account with no contributions reads as broken.
+                if let graph, graph.totalContributions > 0 {
+                    ContributionGraphView(graph: graph)
+                }
+
+                let hasFields = (detail.company?.isEmpty == false)
+                    || (detail.location?.isEmpty == false)
+                if hasFields {
+                    VStack(alignment: .leading, spacing: Spacing.sm) {
+                        fields(detail)
+                    }
+                    .padding(Spacing.sm + 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                    )
+                }
             } else {
                 Text("Couldn’t load extended profile.")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, Spacing.md)
             }
+
+            Spacer(minLength: 0)
 
             if let url = user.profileUrl {
                 Button { NSWorkspace.shared.open(url) } label: {
-                    actionLabelRow("Open profile", systemImage: "arrow.up.right.square")
+                    primaryActionLabel("Open on \(service.rawValue)", systemImage: "arrow.up.right.square")
                 }
-                .buttonStyle(MenuActionButtonStyle())
-                .padding(.top, Spacing.xxs)
+                .buttonStyle(PrimaryActionButtonStyle())
             }
         }
-        .task(id: user.service) {
+        .task(id: account.id) {
             loading = true
-            detail = await viewModel.remoteProfileDetail(for: user.service)
+            detail = await viewModel.remoteProfileDetail(for: service, account: account)
             loading = false
+        }
+        .task(id: account.id) {
+            // Independent of the profile load: GitHub-only, fails silently to no graph.
+            graph = await viewModel.contributionGraph(for: service, account: account)
         }
     }
 
     private var header: some View {
-        HStack(spacing: Spacing.sm) {
-            AsyncImage(url: user.avatarUrl) { phase in
-                if case .success(let image) = phase {
-                    image.resizable().scaledToFill()
-                } else {
-                    Image(systemName: "person.crop.circle.fill")
-                        .resizable()
-                        .foregroundStyle(.secondary.opacity(0.5))
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(Circle())
+        HStack(spacing: Spacing.md) {
+            avatar
 
-            VStack(alignment: .leading, spacing: Spacing.xxs) {
+            VStack(alignment: .leading, spacing: 1) {
                 if let full = detail?.fullName ?? user.displayNameFull, !full.isEmpty {
                     Text(full).font(.headline).lineLimit(1)
                 }
                 Text(user.displayName)
-                    .font(.callout)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
+    }
+
+    /// Real avatar; falls back to the provider's brand monogram badge (matching the account
+    /// rows) rather than a generic grey person icon.
+    private var avatar: some View {
+        AsyncImage(url: user.avatarUrl) { phase in
+            if case .success(let image) = phase {
+                image.resizable().scaledToFill()
+            } else {
+                ProviderBadge(service: service, side: 52)
+            }
+        }
+        .frame(width: 52, height: 52)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
     }
 
     /// The follower / following / repos counts, each shown only when the provider returned
@@ -977,15 +1344,28 @@ private struct RemoteDetailScreen: View {
         ].compactMap { label, value in value.map { (label, $0) } }
 
         if !items.isEmpty {
-            HStack(spacing: Spacing.md) {
-                ForEach(items, id: \.0) { label, value in
-                    VStack(spacing: 0) {
-                        Text("\(value)").font(.headline).monospacedDigit()
-                        Text(label).font(.caption2).foregroundStyle(.secondary)
+            HStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    if index > 0 {
+                        Divider().frame(height: 24)
                     }
+                    VStack(spacing: 1) {
+                        Text("\(item.1)")
+                            .font(.system(.title3, design: .rounded).weight(.semibold))
+                            .monospacedDigit()
+                        Text(item.0)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, Spacing.sm)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
         }
     }
 
@@ -997,12 +1377,68 @@ private struct RemoteDetailScreen: View {
         if let location = d.location, !location.isEmpty {
             KeyValueRow(label: "Location", value: location)
         }
-        if let joined = d.joinedAt {
-            KeyValueRow(label: "Joined", value: Self.joinedFormatter.string(from: joined))
+    }
+
+}
+
+/// GitHub-style contribution heatmap: one column per week, seven rows (Sun→Sat), cells
+/// colored by 0–4 intensity. Sized to fit the fixed 300pt popover (already trimmed to ~13
+/// weeks by the caller), so cells stay legible without horizontal scroll.
+private struct ContributionGraphView: View {
+    let graph: ContributionGraph
+
+    private let gap: CGFloat = 3
+    /// Comfortable, legible cell size; the number of weeks shown is derived to fit the width
+    /// at this size (rather than shrinking cells to cram in the whole year).
+    private let cell: CGFloat = 10
+
+    var body: some View {
+        // Pick the trailing N weeks that fit the available width at a fixed cell size.
+        GeometryReader { geo in
+            let fit = max(1, Int((geo.size.width + gap) / (cell + gap)))
+            let weeks = Array(graph.weeks.suffix(fit))
+            let shown = weeks.flatMap { $0 }.reduce(0) { $0 + $1.count }
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("\(shown) contributions in the last \(fit) weeks")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: gap) {
+                    ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                        VStack(spacing: gap) {
+                            ForEach(Array(week.enumerated()), id: \.offset) { _, day in
+                                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                    .fill(color(for: day.level))
+                                    .frame(width: cell, height: cell)
+                                    .help("\(day.count) on \(Self.dayFormatter.string(from: day.date))")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(height: gridHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Reserved height: caption line + the 7-row grid at the fixed cell size.
+    private var gridHeight: CGFloat {
+        let captionLine: CGFloat = 14 + Spacing.xs
+        return captionLine + cell * 7 + gap * 6
+    }
+
+    /// Maps a 0–4 level to a green of increasing opacity (the `StatusColor.active` hue),
+    /// with a neutral base for empty days — adapts to light/dark like the rest of the app.
+    private func color(for level: Int) -> Color {
+        switch level {
+        case 0: return Color.primary.opacity(0.08)
+        case 1: return StatusColor.active.opacity(0.3)
+        case 2: return StatusColor.active.opacity(0.5)
+        case 3: return StatusColor.active.opacity(0.7)
+        default: return StatusColor.active
         }
     }
 
-    private static let joinedFormatter: DateFormatter = {
+    private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .medium
         f.timeStyle = .none
@@ -1015,38 +1451,39 @@ private struct RemoteDetailScreen: View {
 private struct SectionCard<Content: View, Accessory: View>: View {
     let icon: String
     let title: String
+    /// When true, the header is a toggle and the body collapses; open/closed persists in
+    /// AppStorage keyed by title so it survives popover reopen. Default off so existing
+    /// always-open sections are unchanged.
+    let collapsible: Bool
     @ViewBuilder var accessory: () -> Accessory
     @ViewBuilder var content: () -> Content
+
+    @AppStorage private var isExpanded: Bool
 
     init(
         icon: String,
         title: String,
+        collapsible: Bool = false,
+        expandedByDefault: Bool = true,
         @ViewBuilder accessory: @escaping () -> Accessory = { EmptyView() },
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.icon = icon
         self.title = title
+        self.collapsible = collapsible
         self.accessory = accessory
         self.content = content
+        _isExpanded = AppStorage(wrappedValue: expandedByDefault, "section.expanded.\(title)")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs + 2) {
-            HStack(spacing: Spacing.xs + 2) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-                Text(title.uppercased())
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .tracking(0.6)
-                Spacer(minLength: Spacing.sm)
-                accessory()
-            }
+            headerRow
 
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                content()
+            if !collapsible || isExpanded {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    content()
+                }
             }
         }
         .padding(Spacing.sm + 2)
@@ -1059,6 +1496,39 @@ private struct SectionCard<Content: View, Accessory: View>: View {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
         )
+    }
+
+    @ViewBuilder
+    private var headerRow: some View {
+        let header = HStack(spacing: Spacing.xs + 2) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.6)
+            Spacer(minLength: Spacing.sm)
+            accessory()
+            if collapsible {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
+            }
+        }
+        .contentShape(Rectangle())
+
+        if collapsible {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+            } label: { header }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title) section, \(isExpanded ? "expanded" : "collapsed")")
+        } else {
+            header
+        }
     }
 }
 
@@ -1380,6 +1850,143 @@ private struct RemoteRow: View {
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
         .accessibilityHidden(true)
+    }
+}
+
+/// A remote-account row in the manageable Remote section. Layout (leading→trailing):
+/// provider icon · avatar · username + label tag · status · active radio. Tapping the row
+/// (when a profile resolved) opens its detail screen; the radio switches the active account.
+private struct AccountSwitchRow: View {
+    let account: RemoteAccount
+    let service: RemoteService
+    let isActive: Bool
+    let isSwitching: Bool
+    let isTesting: Bool
+    let disabled: Bool
+    let testResult: StatusViewModel.AccountTestState?
+    /// The resolved profile for THIS account (avatar/username). Nil while loading or if the
+    /// token didn't resolve — the row then falls back to the label only.
+    let user: RemoteUser?
+    let onSwitch: () -> Void
+    let onOpen: (RemoteUser) -> Void
+
+    @State private var isHovering = false
+
+    /// Primary text is the resolved username; the label shows as a secondary tag.
+    private var primaryText: String { user?.username ?? account.displayLabel }
+
+    var body: some View {
+        HStack(spacing: Spacing.sm) {
+            // Provider monogram badge.
+            ProviderBadge(service: service, side: 18)
+
+            // Avatar.
+            avatar
+
+            // Username + label tag.
+            HStack(spacing: Spacing.xs + 1) {
+                Text(primaryText)
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                LabelTag(text: account.displayLabel)
+            }
+
+            trailingStatus
+
+            Spacer(minLength: Spacing.xs)
+
+            // Active radio (the only control that doesn't open detail).
+            Button(action: onSwitch) { radio }
+                .buttonStyle(.plain)
+                .disabled(disabled || isActive)
+        }
+        .padding(.horizontal, Spacing.xs + 2)
+        .padding(.vertical, Spacing.xs + 1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.row, style: .continuous).fill(rowFill)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { if let user { onOpen(user) } }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
+        }
+    }
+
+    /// Transient test feedback (✓/✗) or spinner, inline after the name.
+    @ViewBuilder
+    private var trailingStatus: some View {
+        if isTesting {
+            ProgressView().controlSize(.small)
+        } else if let testResult {
+            switch testResult {
+            case .valid:
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(StatusColor.active)
+                    .help("Connection valid")
+            case .invalid:
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(StatusColor.destructive)
+                    .help("Token invalid")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var radio: some View {
+        if isSwitching {
+            ProgressView().controlSize(.small).frame(width: 16)
+        } else if isActive {
+            Image(systemName: "largecircle.fill.circle")
+                .font(.system(size: 14))
+                .foregroundStyle(StatusColor.active)
+                .frame(width: 16)
+        } else {
+            Image(systemName: "circle")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary.opacity(0.5))
+                .frame(width: 16)
+        }
+    }
+
+    private var avatar: some View {
+        AsyncImage(url: user?.avatarUrl) { phase in
+            if case .success(let image) = phase {
+                image.resizable().scaledToFill()
+            } else {
+                Image(systemName: "person.crop.circle.fill")
+                    .resizable()
+                    .foregroundStyle(.secondary.opacity(0.5))
+            }
+        }
+        .frame(width: 22, height: 22)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        .accessibilityHidden(true)
+    }
+
+    private var rowFill: Color {
+        // No active-state tint — the filled radio alone marks the active account.
+        if isHovering && !disabled { return Color.primary.opacity(0.06) }
+        return .clear
+    }
+}
+
+/// A small pill tag for the account's user-given label (e.g. "Work").
+private struct LabelTag: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule(style: .continuous).fill(Color.secondary.opacity(0.14)))
+            .lineLimit(1)
     }
 }
 
