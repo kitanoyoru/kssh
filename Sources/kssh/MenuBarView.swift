@@ -35,6 +35,7 @@ private enum Route: Equatable {
 struct MenuBarView: View {
     @ObservedObject var viewModel: StatusViewModel
     @ObservedObject var store: SettingsStore
+    @Environment(\.openSettings) private var openSettingsAction
     @State private var route: Route = .main
     /// The identity pending delete confirmation (drives the destructive dialog).
     @State private var keyPendingDelete: SSHIdentity?
@@ -582,21 +583,28 @@ struct MenuBarView: View {
     }
 
     private var settingsButton: some View {
-        // As an accessory app we must promote + activate before opening Settings, or the
-        // window opens behind everything with no focus. Activate, then trigger Settings
-        // via the standard selector (works across macOS 14/15 where SettingsLink alone
-        // won't surface for an LSUIElement app).
-        Button(action: {
-            WindowActivator.activate()
-            if #available(macOS 14.0, *) {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            } else {
-                NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-            }
-        }) {
+        // Opening the Settings scene from a MenuBarExtra accessory app is famously fragile:
+        // both the private `showSettingsWindow:` selector AND SwiftUI's `openSettings`/
+        // `SettingsLink` silently do nothing on macOS 26 (Tahoe), because there's no live
+        // SwiftUI render tree for the Settings scene to initialize against while the app is
+        // .accessory. The reliable fix is ORDER: promote to .regular and activate FIRST
+        // (which establishes the AppKit/SwiftUI context), then trigger Settings on the next
+        // runloop tick. `SettingsLink` alone, tried before this, opened nothing.
+        Button(action: openSettings) {
             actionLabel("Settings…", systemImage: "gearshape")
         }
         .buttonStyle(MenuActionButtonStyle())
+    }
+
+    private func openSettings() {
+        WindowActivator.activate()
+        // Defer so the activation-policy change has taken effect before we ask to surface
+        // the Settings window; firing synchronously races the policy switch. Once the app
+        // is .regular and active, the supported `openSettings` environment action has the
+        // SwiftUI render-tree context it needs to actually open the scene.
+        DispatchQueue.main.async {
+            openSettingsAction()
+        }
     }
 
     private func actionLabel(_ title: String, systemImage: String, spin: Bool = false) -> some View {
