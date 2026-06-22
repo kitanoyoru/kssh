@@ -39,6 +39,40 @@ struct GitLabService {
         return keys.filter { localPublicKeys.contains(normalizeKey($0.key)) }.count
     }
 
+    /// Registers `publicKey` on the token's account via `POST /api/v4/user/keys`. 201 =
+    /// created; a 400 (GitLab's "fingerprint has already been taken") maps to
+    /// `.alreadyExists` for a friendly message.
+    static func addKey(title: String, publicKey: String, pat: String, instance: String) async -> Result<Void, RemoteKeyError> {
+        guard !pat.isEmpty else { return .failure(.noToken) }
+        guard let request = addKeyRequest(title: title, publicKey: publicKey, pat: pat, instance: instance) else {
+            return .failure(.network)
+        }
+
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse else {
+            return .failure(.network)
+        }
+        switch http.statusCode {
+        case 201: return .success(())
+        case 400: return .failure(.alreadyExists)
+        default: return .failure(.http(http.statusCode))
+        }
+    }
+
+    /// Pure, testable builder for the add-key request, instance-aware. Lets tests assert
+    /// the URL/method/headers/body without a network call.
+    static func addKeyRequest(title: String, publicKey: String, pat: String, instance: String) -> URLRequest? {
+        let host = instance.isEmpty ? "gitlab.com" : instance
+        guard let url = URL(string: "https://\(host)/api/v4/user/keys") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(pat)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["title": title, "key": publicKey])
+        request.timeoutInterval = 10
+        return request
+    }
+
     /// GET helper returning the body only on HTTP 200, nil otherwise.
     private static func get(_ url: URL, pat: String) async -> Data? {
         var request = URLRequest(url: url)

@@ -9,11 +9,13 @@ private enum Route: Equatable {
     case profilesList
     case profileForm(editing: GitProfile?)   // nil = add
     case createGPGKey
+    case createSSHKey
+    case renameKey(identity: SSHIdentity)
 
     /// Where the back button returns to.
     var parent: Route {
         switch self {
-        case .main, .profilesList, .createGPGKey: return .main
+        case .main, .profilesList, .createGPGKey, .createSSHKey, .renameKey: return .main
         case .profileForm: return .profilesList
         }
     }
@@ -24,6 +26,8 @@ private enum Route: Equatable {
         case .profilesList: return "Git Profiles"
         case .profileForm(let editing): return editing == nil ? "Add Profile" : "Edit Profile"
         case .createGPGKey: return "Create GPG Key"
+        case .createSSHKey: return "Generate SSH Key"
+        case .renameKey: return "Rename Key"
         }
     }
 }
@@ -32,6 +36,8 @@ struct MenuBarView: View {
     @ObservedObject var viewModel: StatusViewModel
     @ObservedObject var store: SettingsStore
     @State private var route: Route = .main
+    /// The identity pending delete confirmation (drives the destructive dialog).
+    @State private var keyPendingDelete: SSHIdentity?
 
     var body: some View {
         ZStack {
@@ -52,6 +58,20 @@ struct MenuBarView: View {
             case .createGPGKey:
                 routeScreen {
                     CreateGPGScreen(viewModel: viewModel) {
+                        withAnimation { route = .main }
+                    }
+                }
+                .transition(.move(edge: .trailing))
+            case .createSSHKey:
+                routeScreen {
+                    CreateSSHKeyScreen(viewModel: viewModel) {
+                        withAnimation { route = .main }
+                    }
+                }
+                .transition(.move(edge: .trailing))
+            case .renameKey(let identity):
+                routeScreen {
+                    RenameKeyScreen(viewModel: viewModel, identity: identity) {
                         withAnimation { route = .main }
                     }
                 }
@@ -299,20 +319,7 @@ struct MenuBarView: View {
                     ) {
                         Task { await viewModel.switchIdentity(identity) }
                     }
-                    .contextMenu {
-                        Button { Clipboard.copy(identity.fingerprint) } label: {
-                            Label("Copy fingerprint", systemImage: "doc.on.doc")
-                        }
-                        if !identity.publicKeyPath.isEmpty {
-                            Button {
-                                if let pub = try? String(contentsOfFile: identity.publicKeyPath, encoding: .utf8) {
-                                    Clipboard.copy(pub.trimmingCharacters(in: .whitespacesAndNewlines))
-                                }
-                            } label: {
-                                Label("Copy public key", systemImage: "doc.on.doc")
-                            }
-                        }
-                    }
+                    .contextMenu { keyContextMenu(for: identity) }
                 }
                 // Surface any agent keys that aren't on disk (loaded elsewhere),
                 // so merging away the SSH section doesn't hide them.
@@ -326,7 +333,90 @@ struct MenuBarView: View {
                               label: key.publicKey.isEmpty ? "Copy fingerprint" : "Copy public key")
                 }
             }
+            generateKeyButton
         }
+        .confirmationDialog(
+            "Delete \(keyPendingDelete?.name ?? "key")?",
+            isPresented: Binding(
+                get: { keyPendingDelete != nil },
+                set: { if !$0 { keyPendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Move to backup", role: .destructive) {
+                if let identity = keyPendingDelete {
+                    Task { await viewModel.deleteKey(identity) }
+                }
+                keyPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { keyPendingDelete = nil }
+        } message: {
+            Text("The key files move to ~/.ssh/.kssh-trash (recoverable). It is also unloaded from the agent.")
+        }
+    }
+
+    private var generateKeyButton: some View {
+        Button(action: { withAnimation { route = .createSSHKey } }) {
+            HStack(spacing: Spacing.xs + 1) {
+                Image(systemName: "key.horizontal.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Generate key…")
+                    .font(.caption)
+                Spacer()
+            }
+            .foregroundStyle(.tint)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, Spacing.xxs)
+        .accessibilityLabel("Generate a new SSH key")
+    }
+
+    /// Per-key context menu: copy, rename, add-to-remote, delete. Extracted so the
+    /// `keysSection` body stays readable.
+    @ViewBuilder
+    private func keyContextMenu(for identity: SSHIdentity) -> some View {
+        Button { Clipboard.copy(identity.fingerprint) } label: {
+            Label("Copy fingerprint", systemImage: "doc.on.doc")
+        }
+        if !identity.publicKeyPath.isEmpty {
+            Button {
+                if let pub = try? String(contentsOfFile: identity.publicKeyPath, encoding: .utf8) {
+                    Clipboard.copy(pub.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+            } label: {
+                Label("Copy public key", systemImage: "doc.on.doc")
+            }
+        }
+
+        // Add-to-remote: only for the active key (remote scoping is active-key based) and
+        // only for services with a resolvable token.
+        if identity.id == viewModel.activeIdentity?.id {
+            Menu("Add to remote") {
+                if viewModel.token(for: .github)?.isEmpty == false {
+                    Button {
+                        Task { await viewModel.addActiveKeyToRemote(.github) }
+                    } label: { Label("GitHub", systemImage: "arrow.up.circle") }
+                }
+                if viewModel.token(for: .gitlab)?.isEmpty == false {
+                    Button {
+                        Task { await viewModel.addActiveKeyToRemote(.gitlab) }
+                    } label: { Label("GitLab", systemImage: "arrow.up.circle") }
+                }
+            }
+            .disabled(viewModel.addingKeyToRemote != nil)
+        }
+
+        Divider()
+
+        Button { withAnimation { route = .renameKey(identity: identity) } } label: {
+            Label("Rename…", systemImage: "pencil")
+        }
+        .disabled(viewModel.mutatingKey != nil)
+        Button(role: .destructive) { keyPendingDelete = identity } label: {
+            Label("Delete…", systemImage: "trash")
+        }
+        .disabled(viewModel.mutatingKey != nil)
     }
 
     /// Loaded agent keys with no matching on-disk identity (by fingerprint).
@@ -660,6 +750,123 @@ private struct CreateGPGScreen: View {
                 }
                 .buttonStyle(MenuActionButtonStyle())
                 .disabled(!canCreate)
+            }
+        }
+    }
+}
+
+/// Generate-SSH-key form (create-only: the new key is not loaded or written to config).
+/// Mirrors `CreateGPGScreen`. Navigates back on success.
+private struct CreateSSHKeyScreen: View {
+    @ObservedObject var viewModel: StatusViewModel
+    let onDone: () -> Void
+
+    @State private var keyType: SSHIdentityService.KeyType = .ed25519
+    @State private var comment: String
+    @State private var passphrase = ""
+
+    init(viewModel: StatusViewModel, onDone: @escaping () -> Void) {
+        self.viewModel = viewModel
+        self.onDone = onDone
+        // Seed the comment with the configured git email — the conventional key comment.
+        _comment = State(initialValue: viewModel.gitIdentity?.email ?? "")
+    }
+
+    private var canCreate: Bool { !viewModel.generatingKey }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Picker("Type", selection: $keyType) {
+                Text("Ed25519").tag(SSHIdentityService.KeyType.ed25519)
+                Text("RSA (4096)").tag(SSHIdentityService.KeyType.rsa)
+            }
+            .pickerStyle(.segmented)
+
+            TextField("Comment (e.g. you@host)", text: $comment).textFieldStyle(.roundedBorder)
+            SecureField("Passphrase (optional)", text: $passphrase).textFieldStyle(.roundedBorder)
+
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                KeyValueRow(label: "Saved to", value: "~/.ssh/id_\(keyType.rawValue)")
+                KeyValueRow(label: "After create", value: "not loaded — load it manually")
+            }
+
+            if let err = viewModel.keygenError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(StatusColor.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: Spacing.sm) {
+                if viewModel.generatingKey {
+                    ProgressView().controlSize(.small)
+                }
+                Button {
+                    Task {
+                        let ok = await viewModel.generateSSHKey(type: keyType, comment: comment, passphrase: passphrase)
+                        if ok { onDone() }
+                    }
+                } label: {
+                    actionLabelRow("Generate key", systemImage: "plus.circle")
+                }
+                .buttonStyle(MenuActionButtonStyle())
+                .disabled(!canCreate)
+            }
+        }
+    }
+}
+
+/// Rename a key's files in ~/.ssh. One-field form like `ProfileFormScreen`; navigates back
+/// on success. Failures (invalid name, name taken, key referenced in config) show inline.
+private struct RenameKeyScreen: View {
+    @ObservedObject var viewModel: StatusViewModel
+    let identity: SSHIdentity
+    let onDone: () -> Void
+
+    @State private var newName: String
+
+    init(viewModel: StatusViewModel, identity: SSHIdentity, onDone: @escaping () -> Void) {
+        self.viewModel = viewModel
+        self.identity = identity
+        self.onDone = onDone
+        _newName = State(initialValue: identity.name)
+    }
+
+    private var canSave: Bool {
+        SSHIdentityService.isValidKeyName(newName)
+            && newName != identity.name
+            && viewModel.mutatingKey == nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            KeyValueRow(label: "Current", value: identity.name)
+            TextField("New name", text: $newName).textFieldStyle(.roundedBorder)
+            Text("Renames both the private key and its .pub in ~/.ssh.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if let err = viewModel.keyActionError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(StatusColor.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: Spacing.sm) {
+                if viewModel.mutatingKey == identity.id {
+                    ProgressView().controlSize(.small)
+                }
+                Button {
+                    Task {
+                        let ok = await viewModel.renameKey(identity, to: newName)
+                        if ok { onDone() }
+                    }
+                } label: {
+                    actionLabelRow("Rename", systemImage: "checkmark.circle")
+                }
+                .buttonStyle(MenuActionButtonStyle())
+                .disabled(!canSave)
             }
         }
     }

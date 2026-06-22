@@ -40,6 +40,41 @@ struct GitHubService {
         return keys.filter { localPublicKeys.contains(normalizeKey($0.key)) }.count
     }
 
+    /// Registers `publicKey` on the token's account via `POST /user/keys`. 201 = created;
+    /// a 422 (GitHub's "key is already in use") maps to `.alreadyExists` so the UI can show
+    /// a friendly message instead of a raw status code.
+    static func addKey(title: String, publicKey: String, pat: String) async -> Result<Void, RemoteKeyError> {
+        guard !pat.isEmpty else { return .failure(.noToken) }
+        guard let request = addKeyRequest(title: title, publicKey: publicKey, pat: pat) else {
+            return .failure(.network)
+        }
+
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse else {
+            return .failure(.network)
+        }
+        switch http.statusCode {
+        case 201: return .success(())
+        case 422: return .failure(.alreadyExists)
+        default: return .failure(.http(http.statusCode))
+        }
+    }
+
+    /// Pure, testable builder for the add-key request (URL, method, headers, JSON body), so
+    /// the request shape can be asserted without hitting the network.
+    static func addKeyRequest(title: String, publicKey: String, pat: String) -> URLRequest? {
+        guard let url = URL(string: "https://api.github.com/user/keys") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(pat)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("kssh", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["title": title, "key": publicKey])
+        request.timeoutInterval = 10
+        return request
+    }
+
     /// GET helper returning the body only on HTTP 200, nil otherwise.
     private static func get(_ url: URL, pat: String) async -> Data? {
         var request = URLRequest(url: url)

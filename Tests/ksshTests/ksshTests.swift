@@ -506,20 +506,21 @@ final class GitServiceArgumentTests: XCTestCase {
 
 final class RemoteUserTests: XCTestCase {
     func testDisplayName() {
-        let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1, avatarUrl: nil)
+        let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1, avatarUrl: nil, displayNameFull: nil, profileUrl: nil)
         XCTAssertEqual(user.displayName, "@testuser")
     }
 
     func testServiceCases() {
-        XCTAssertEqual(RemoteService.allCases.count, 2)
+        XCTAssertEqual(RemoteService.allCases.count, 3)
         XCTAssertTrue(RemoteService.allCases.contains(.github))
         XCTAssertTrue(RemoteService.allCases.contains(.gitlab))
+        XCTAssertTrue(RemoteService.allCases.contains(.bitbucket))
     }
 
     func testBelongsToActiveKey() {
         // matchedKeyCount is scoped to the active key: >=1 means the row should show.
-        let linked = RemoteUser(service: .github, username: "u", matchedKeyCount: 1, avatarUrl: nil)
-        let unlinked = RemoteUser(service: .github, username: "u", matchedKeyCount: 0, avatarUrl: nil)
+        let linked = RemoteUser(service: .github, username: "u", matchedKeyCount: 1, avatarUrl: nil, displayNameFull: nil, profileUrl: nil)
+        let unlinked = RemoteUser(service: .github, username: "u", matchedKeyCount: 0, avatarUrl: nil, displayNameFull: nil, profileUrl: nil)
         XCTAssertTrue(linked.belongsToActiveKey)
         XCTAssertFalse(unlinked.belongsToActiveKey)
     }
@@ -547,5 +548,83 @@ final class KeyNormalizationTests: XCTestCase {
             GitHubService.normalizeKey("  ssh-ed25519   AAAA1111   me@host  "),
             "ssh-ed25519 AAAA1111"
         )
+    }
+}
+
+final class SSHKeygenArgumentTests: XCTestCase {
+    func testEd25519Args() {
+        let args = SSHIdentityService.keygenArguments(type: .ed25519, path: "/p/k", comment: "me@host", passphrase: "")
+        XCTAssertEqual(args, ["-t", "ed25519", "-f", "/p/k", "-N", "", "-C", "me@host"])
+    }
+
+    func testRSAAddsBitLength() {
+        let args = SSHIdentityService.keygenArguments(type: .rsa, path: "/p/k", comment: "", passphrase: "")
+        XCTAssertEqual(args, ["-t", "rsa", "-b", "4096", "-f", "/p/k", "-N", ""])
+    }
+
+    func testEmptyCommentDropsFlag() {
+        let args = SSHIdentityService.keygenArguments(type: .ed25519, path: "/p/k", comment: "", passphrase: "x")
+        XCTAssertFalse(args.contains("-C"))
+        let idx = args.firstIndex(of: "-N")!
+        XCTAssertEqual(args[idx + 1], "x")
+    }
+}
+
+final class SSHKeyNameTests: XCTestCase {
+    func testBaseUsedWhenFree() {
+        XCTAssertEqual(SSHIdentityService.nextAvailableName(base: "id_ed25519", existing: []), "id_ed25519")
+    }
+
+    func testSkipsWhenPrivateOrPubTaken() {
+        let taken: Set<String> = ["id_ed25519", "id_ed25519_2.pub"]
+        // _2 is blocked by its .pub sibling, so _3 wins.
+        XCTAssertEqual(SSHIdentityService.nextAvailableName(base: "id_ed25519", existing: taken), "id_ed25519_3")
+    }
+
+    func testValidName() {
+        XCTAssertTrue(SSHIdentityService.isValidKeyName("id_work"))
+        XCTAssertFalse(SSHIdentityService.isValidKeyName(""))
+        XCTAssertFalse(SSHIdentityService.isValidKeyName("a/b"))
+        XCTAssertFalse(SSHIdentityService.isValidKeyName("id_work.pub"))
+    }
+}
+
+final class RemoteAddKeyRequestTests: XCTestCase {
+    func testGitHubRequest() throws {
+        let req = try XCTUnwrap(GitHubService.addKeyRequest(title: "t", publicKey: "ssh-ed25519 AAAA", pat: "tok"))
+        XCTAssertEqual(req.url?.absoluteString, "https://api.github.com/user/keys")
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
+        let body = try JSONSerialization.jsonObject(with: try XCTUnwrap(req.httpBody)) as? [String: String]
+        XCTAssertEqual(body?["title"], "t")
+        XCTAssertEqual(body?["key"], "ssh-ed25519 AAAA")
+    }
+
+    func testGitLabRequestUsesInstance() throws {
+        let req = try XCTUnwrap(GitLabService.addKeyRequest(title: "t", publicKey: "k", pat: "tok", instance: "git.acme.io"))
+        XCTAssertEqual(req.url?.absoluteString, "https://git.acme.io/api/v4/user/keys")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
+    }
+
+    func testGitLabDefaultsToGitlabDotCom() throws {
+        let req = try XCTUnwrap(GitLabService.addKeyRequest(title: "t", publicKey: "k", pat: "tok", instance: ""))
+        XCTAssertEqual(req.url?.absoluteString, "https://gitlab.com/api/v4/user/keys")
+    }
+
+    func testErrorMessages() {
+        XCTAssertNotNil(RemoteKeyError.alreadyExists.errorDescription)
+        XCTAssertNotNil(RemoteKeyError.http(500).errorDescription)
+        XCTAssertTrue(RemoteKeyError.http(503).errorDescription!.contains("503"))
+    }
+}
+
+final class SSHRenameGateTests: XCTestCase {
+    func testConfigReferencedKeyDetected() {
+        // renameKey blocks when the key is referenced; this is the gate it uses.
+        let cfg = "Host gh\n  IdentityFile ~/.ssh/work"
+        let workPath = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/work")
+        let otherPath = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/play")
+        XCTAssertTrue(SSHIdentityService.configReferences(workPath, in: cfg))
+        XCTAssertFalse(SSHIdentityService.configReferences(otherPath, in: cfg))
     }
 }

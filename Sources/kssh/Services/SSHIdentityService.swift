@@ -252,6 +252,155 @@ struct SSHIdentityService {
         ["-d", identity.privateKeyPath]
     }
 
+    // MARK: - Key lifecycle (generate / delete / rename)
+
+    /// The key types kssh can generate. `rsa` is offered for legacy hosts; `ed25519` is
+    /// the default everywhere else.
+    enum KeyType: String, CaseIterable {
+        case ed25519
+        case rsa
+    }
+
+    enum KeyError: LocalizedError {
+        case keyExists(String)
+        case keygenFailed(String)
+        case keyInUse
+        case nameTaken(String)
+        case invalidName
+        case moveFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .keyExists(let name): return "A key named \(name) already exists in ~/.ssh"
+            case .keygenFailed(let msg): return "ssh-keygen failed: \(msg)"
+            case .keyInUse: return "This key is referenced in ~/.ssh/config. Switch to another key or edit the config first."
+            case .nameTaken(let name): return "A file named \(name) already exists in ~/.ssh"
+            case .invalidName: return "Name must be a single file name with no “/” and no “.pub” suffix."
+            case .moveFailed(let msg): return "Could not move key file: \(msg)"
+            }
+        }
+    }
+
+    /// Pure, testable builder for the `ssh-keygen` argument vector. An empty `comment`
+    /// drops `-C`; an empty `passphrase` produces `-N ""` (unencrypted, non-interactive).
+    /// rsa keys are 4096-bit.
+    static func keygenArguments(type: KeyType, path: String, comment: String, passphrase: String) -> [String] {
+        var args = ["-t", type.rawValue]
+        if type == .rsa { args += ["-b", "4096"] }
+        args += ["-f", path, "-N", passphrase]
+        if !comment.isEmpty { args += ["-C", comment] }
+        return args
+    }
+
+    /// Pure, testable next-free-name picker. Given a base (e.g. "id_ed25519") and the set
+    /// of names already present in `~/.ssh`, returns the base if free, otherwise
+    /// "id_ed25519_2", "_3", … The `.pub` sibling is considered too, so both files are free.
+    static func nextAvailableName(base: String, existing: Set<String>) -> String {
+        func free(_ name: String) -> Bool {
+            !existing.contains(name) && !existing.contains("\(name).pub")
+        }
+        if free(base) { return base }
+        var n = 2
+        while !free("\(base)_\(n)") { n += 1 }
+        return "\(base)_\(n)"
+    }
+
+    /// Generates a new keypair in `~/.ssh` (create-only: it is NOT added to the agent and
+    /// NOT written to `~/.ssh/config`). Returns the freshly discovered `SSHIdentity`.
+    static func generateKey(type: KeyType, comment: String, passphrase: String) async throws -> SSHIdentity {
+        let fm = FileManager.default
+        let existing = Set((try? fm.contentsOfDirectory(atPath: sshDir)) ?? [])
+        let name = nextAvailableName(base: "id_\(type.rawValue)", existing: existing)
+        let path = (sshDir as NSString).appendingPathComponent(name)
+
+        // rsa-4096 needs time; ed25519 is instant. A generous timeout covers both.
+        let args = keygenArguments(type: type, path: path, comment: comment, passphrase: passphrase)
+        guard let result = await ProcessRunner.run("ssh-keygen", arguments: args, timeout: 120) else {
+            throw KeyError.keygenFailed("ssh-keygen did not run")
+        }
+        guard result.exitCode == 0 else {
+            throw KeyError.keygenFailed(result.output.isEmpty ? "exit \(result.exitCode)" : result.output)
+        }
+
+        // ssh-keygen already sets these, but set them explicitly for safety (mirrors the
+        // 0o600 discipline in rewriteConfig).
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: "\(path).pub")
+
+        let refreshed = await discover()
+        if let made = refreshed.first(where: { $0.privateKeyPath == path }) {
+            return made
+        }
+        throw KeyError.keygenFailed("key created but not found on disk")
+    }
+
+    /// Deletes a key by unloading it from the agent (benign if not loaded) and moving both
+    /// the private key and its `.pub` into a recoverable backup directory under
+    /// `~/.ssh/.kssh-trash/<suffix>/` — never a hard `rm`. Does NOT edit `~/.ssh/config`;
+    /// a dangling reference is left for the user (out of scope for v1).
+    static func deleteKey(_ identity: SSHIdentity, trashSuffix: String) async throws {
+        try? await unloadFromAgent(identity)
+
+        let fm = FileManager.default
+        let trashDir = (sshDir as NSString)
+            .appendingPathComponent(".kssh-trash")
+        let dest = (trashDir as NSString).appendingPathComponent(trashSuffix)
+        do {
+            try fm.createDirectory(atPath: dest, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o700])
+        } catch {
+            throw KeyError.moveFailed(error.localizedDescription)
+        }
+
+        func move(_ src: String) throws {
+            guard fm.fileExists(atPath: src) else { return }
+            let to = (dest as NSString).appendingPathComponent((src as NSString).lastPathComponent)
+            do { try fm.moveItem(atPath: src, toPath: to) }
+            catch { throw KeyError.moveFailed(error.localizedDescription) }
+        }
+        try move(identity.privateKeyPath)
+        if !identity.publicKeyPath.isEmpty { try move(identity.publicKeyPath) }
+    }
+
+    /// Pure, testable validator for a rename target. Rejects empty names, any path
+    /// separator, and a `.pub` suffix (the public key is renamed implicitly).
+    static func isValidKeyName(_ name: String) -> Bool {
+        !name.isEmpty && !name.contains("/") && !name.hasSuffix(".pub")
+    }
+
+    /// Renames a key's files in `~/.ssh` (private → `~/.ssh/<newName>`, `.pub` likewise).
+    /// Blocked when the key is referenced in `~/.ssh/config` (the reference is by path and
+    /// would dangle), keeping the well-tested config invariant untouched. Returns the
+    /// renamed identity after re-discovery.
+    static func renameKey(_ identity: SSHIdentity, to newName: String) async throws -> SSHIdentity {
+        guard isValidKeyName(newName) else { throw KeyError.invalidName }
+        guard !configReferences(identity.privateKeyPath, in: currentConfigText()) else {
+            throw KeyError.keyInUse
+        }
+
+        let fm = FileManager.default
+        let newPriv = (sshDir as NSString).appendingPathComponent(newName)
+        let newPub = "\(newPriv).pub"
+        guard !fm.fileExists(atPath: newPriv), !fm.fileExists(atPath: newPub) else {
+            throw KeyError.nameTaken(newName)
+        }
+
+        do {
+            try fm.moveItem(atPath: identity.privateKeyPath, toPath: newPriv)
+            if !identity.publicKeyPath.isEmpty, fm.fileExists(atPath: identity.publicKeyPath) {
+                try fm.moveItem(atPath: identity.publicKeyPath, toPath: newPub)
+            }
+        } catch {
+            throw KeyError.moveFailed(error.localizedDescription)
+        }
+
+        let refreshed = await discover()
+        if let renamed = refreshed.first(where: { $0.privateKeyPath == newPriv }) {
+            return renamed
+        }
+        throw KeyError.moveFailed("renamed key not found on disk")
+    }
+
     // MARK: - Config rewrite
 
     private static func rewriteConfig(activating identity: SSHIdentity) throws {

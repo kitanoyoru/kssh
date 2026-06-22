@@ -33,6 +33,18 @@ final class StatusViewModel: ObservableObject {
     /// Git profile (work/study) currently being applied.
     @Published var switchingProfile: String?
 
+    /// SSH key generation state (in-popover Create-key form).
+    @Published var generatingKey = false
+    @Published var keygenError: String?
+
+    /// Id of the on-disk identity currently being deleted or renamed (for row spinner +
+    /// disabling), and the last delete/rename failure.
+    @Published var mutatingKey: String?
+    @Published var keyActionError: String?
+
+    /// The remote service the active key is currently being uploaded to, if any.
+    @Published var addingKeyToRemote: RemoteService?
+
     /// True while an ssh-agent is being started (Enable button busy state).
     @Published var startingAgent = false
 
@@ -88,9 +100,8 @@ final class StatusViewModel: ObservableObject {
         // a key that isn't on that account hides the row (see remoteSection's gate).
         // Token priority: the PAT set in Settings, falling back to the ~/.netrc password
         // for the host so existing git users work without re-entering a token.
-        let gitlabHost = store.gitlabInstance.isEmpty ? "gitlab.com" : store.gitlabInstance
-        let githubToken = store.githubPat.isEmpty ? (NetrcReader.password(forMachine: "github.com") ?? "") : store.githubPat
-        let gitlabToken = store.gitlabPat.isEmpty ? (NetrcReader.password(forMachine: gitlabHost) ?? "") : store.gitlabPat
+        let githubToken = token(for: .github) ?? ""
+        let gitlabToken = token(for: .gitlab) ?? ""
 
         // The loaded key matching the active config identity (by fingerprint). Only this
         // key is checked against each account; if there's no active loaded key, the remote
@@ -256,6 +267,128 @@ final class StatusViewModel: ObservableObject {
         }
         await refresh()
         return true
+    }
+
+    // MARK: - SSH key lifecycle
+
+    /// Generates a new SSH keypair (create-only — not loaded into the agent, not written to
+    /// config) and refreshes so it appears in the Keys list. Returns true on success.
+    func generateSSHKey(type: SSHIdentityService.KeyType, comment: String, passphrase: String) async -> Bool {
+        guard !generatingKey else { return false }
+        generatingKey = true
+        keygenError = nil
+        defer { generatingKey = false }
+
+        do {
+            _ = try await SSHIdentityService.generateKey(type: type, comment: comment, passphrase: passphrase)
+        } catch {
+            keygenError = error.localizedDescription
+            return false
+        }
+        await refresh()
+        return true
+    }
+
+    /// Deletes a key (unload from agent + move its files to a recoverable backup dir), then
+    /// refreshes. Surfaces failures via `keyActionError`; a success sets a neutral `notice`.
+    func deleteKey(_ identity: SSHIdentity) async {
+        guard mutatingKey == nil else { return }
+        mutatingKey = identity.id
+        keyActionError = nil
+        defer { mutatingKey = nil }
+
+        do {
+            try await SSHIdentityService.deleteKey(identity, trashSuffix: trashSuffix())
+        } catch {
+            keyActionError = error.localizedDescription
+            return
+        }
+        notice = "Moved \(identity.name) to ~/.ssh/.kssh-trash (recoverable)."
+        await refresh()
+    }
+
+    /// Renames a key's files in ~/.ssh, then refreshes. Returns true on success; failures
+    /// (invalid name, name taken, key referenced in config) surface via `keyActionError`.
+    func renameKey(_ identity: SSHIdentity, to newName: String) async -> Bool {
+        guard mutatingKey == nil else { return false }
+        mutatingKey = identity.id
+        keyActionError = nil
+        defer { mutatingKey = nil }
+
+        do {
+            _ = try await SSHIdentityService.renameKey(identity, to: newName)
+        } catch {
+            keyActionError = error.localizedDescription
+            return false
+        }
+        await refresh()
+        return true
+    }
+
+    /// Uploads the active key's public key to the given remote, reusing the same token
+    /// resolution as `refresh()` (Settings PAT → ~/.netrc fallback). Refreshes afterwards so
+    /// the Remote section's matched-key state updates. Returns true on success.
+    func addActiveKeyToRemote(_ service: RemoteService) async -> Bool {
+        guard addingKeyToRemote == nil else { return false }
+        guard let active = activeIdentity, !active.publicKeyPath.isEmpty,
+              let pub = try? String(contentsOfFile: active.publicKeyPath, encoding: .utf8) else {
+            error = "No active key with a public key file to upload."
+            return false
+        }
+        let publicKey = pub.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let token = token(for: service), !token.isEmpty else {
+            error = "No \(service.rawValue) token. Add one in Settings."
+            return false
+        }
+
+        addingKeyToRemote = service
+        error = nil
+        defer { addingKeyToRemote = nil }
+
+        let title = active.comment.isEmpty ? "kssh — \(active.name)" : active.comment
+        let result: Result<Void, RemoteKeyError>
+        switch service {
+        case .github:
+            result = await GitHubService.addKey(title: title, publicKey: publicKey, pat: token)
+        case .gitlab:
+            result = await GitLabService.addKey(title: title, publicKey: publicKey, pat: token, instance: store.gitlabInstance)
+        case .bitbucket:
+            error = "Adding keys to Bitbucket isn't supported yet."
+            return false
+        }
+
+        switch result {
+        case .success:
+            notice = "Added \(active.name) to \(service.rawValue)."
+            await refresh()
+            return true
+        case .failure(let err):
+            error = err.localizedDescription
+            return false
+        }
+    }
+
+    /// The token for a remote, resolved exactly as `refresh()` does: the Settings PAT,
+    /// falling back to the `~/.netrc` password for the host. Returns nil for Bitbucket
+    /// (token-based upload isn't supported).
+    func token(for service: RemoteService) -> String? {
+        switch service {
+        case .github:
+            return store.githubPat.isEmpty ? NetrcReader.password(forMachine: "github.com") : store.githubPat
+        case .gitlab:
+            let host = store.gitlabInstance.isEmpty ? "gitlab.com" : store.gitlabInstance
+            return store.gitlabPat.isEmpty ? NetrcReader.password(forMachine: host) : store.gitlabPat
+        case .bitbucket:
+            return nil
+        }
+    }
+
+    /// A unique-ish backup subdirectory name. `Date()` is intentionally read here (the app
+    /// layer), keeping the pure service code testable.
+    private func trashSuffix() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        return f.string(from: Date())
     }
 
     private func loadGit() async -> GitIdentity? {
