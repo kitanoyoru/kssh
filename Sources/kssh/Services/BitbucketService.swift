@@ -27,6 +27,25 @@ struct BitbucketService {
         return try? JSONDecoder().decode(BitbucketUser.self, from: data)
     }
 
+    /// Extended profile detail for the detail screen. Bitbucket's user endpoint is sparse:
+    /// it returns the display name, location, and creation date — no follower or repo
+    /// counts — so those stay nil and the UI omits them. Fetched lazily on tap.
+    static func profileDetail(username: String, appPassword: String) async -> RemoteProfileDetail? {
+        guard !username.isEmpty, !appPassword.isEmpty else { return nil }
+        let auth = basicAuth(username: username, password: appPassword)
+        guard let profile = await fetchProfile(auth: auth) else { return nil }
+        return RemoteProfileDetail(
+            fullName: profile.displayName,
+            bio: nil,
+            company: nil,
+            location: profile.location,
+            publicRepos: nil,
+            followers: nil,
+            following: nil,
+            joinedAt: profile.createdOn.flatMap { ISO8601DateFormatter().date(from: $0) }
+        )
+    }
+
     /// Best-effort count of local SSH keys registered on the account; 0 on any failure.
     /// Follows Bitbucket's cursor-based pagination (up to 10 pages).
     private static func matchedKeyCount(forKeys localKeys: [SSHKey], accountId: String, auth: String) async -> Int {
@@ -88,6 +107,8 @@ private struct BitbucketKey: Decodable {
 private struct BitbucketUser: Decodable {
     let accountId: String
     let displayName: String
+    let location: String?
+    let createdOn: String?
     let links: BitbucketLinks
 
     struct BitbucketLinks: Decodable {
@@ -99,6 +120,8 @@ private struct BitbucketUser: Decodable {
     enum CodingKeys: String, CodingKey {
         case accountId = "account_id"
         case displayName = "display_name"
+        case location
+        case createdOn = "created_on"
         case links
     }
 }

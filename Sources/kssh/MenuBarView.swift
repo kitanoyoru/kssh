@@ -11,11 +11,12 @@ private enum Route: Equatable {
     case createGPGKey
     case createSSHKey
     case renameKey(identity: SSHIdentity)
+    case remoteDetail(user: RemoteUser)
 
     /// Where the back button returns to.
     var parent: Route {
         switch self {
-        case .main, .profilesList, .createGPGKey, .createSSHKey, .renameKey: return .main
+        case .main, .profilesList, .createGPGKey, .createSSHKey, .renameKey, .remoteDetail: return .main
         case .profileForm: return .profilesList
         }
     }
@@ -28,6 +29,7 @@ private enum Route: Equatable {
         case .createGPGKey: return "Create GPG Key"
         case .createSSHKey: return "Generate SSH Key"
         case .renameKey: return "Rename Key"
+        case .remoteDetail(let user): return user.service.rawValue
         }
     }
 }
@@ -75,6 +77,11 @@ struct MenuBarView: View {
                     RenameKeyScreen(viewModel: viewModel, identity: identity) {
                         withAnimation { route = .main }
                     }
+                }
+                .transition(.move(edge: .trailing))
+            case .remoteDetail(let user):
+                routeScreen {
+                    RemoteDetailScreen(viewModel: viewModel, user: user)
                 }
                 .transition(.move(edge: .trailing))
             }
@@ -554,9 +561,9 @@ struct MenuBarView: View {
         let bitbucket = viewModel.bitbucketUser.flatMap { $0.belongsToActiveKey ? $0 : nil }
         if github != nil || gitlab != nil || bitbucket != nil {
             SectionCard(icon: "globe", title: "Remote") {
-                if let github    { RemoteRow(user: github) }
-                if let gitlab    { RemoteRow(user: gitlab) }
-                if let bitbucket { RemoteRow(user: bitbucket) }
+                if let github    { RemoteRow(user: github) { withAnimation { route = .remoteDetail(user: github) } } }
+                if let gitlab    { RemoteRow(user: gitlab) { withAnimation { route = .remoteDetail(user: gitlab) } } }
+                if let bitbucket { RemoteRow(user: bitbucket) { withAnimation { route = .remoteDetail(user: bitbucket) } } }
             }
         }
     }
@@ -880,6 +887,129 @@ private struct RenameKeyScreen: View {
     }
 }
 
+/// Remote profile detail screen: avatar + name/username, follower/following/repo counts,
+/// bio, location/company/joined, and an "Open profile" button. The extended detail is
+/// fetched lazily on appear (not during the per-refresh resolution); counts/fields the
+/// provider doesn't return are simply omitted. The username/avatar come from the already-
+/// resolved `RemoteUser`, so the header renders instantly while the rest loads.
+private struct RemoteDetailScreen: View {
+    @ObservedObject var viewModel: StatusViewModel
+    let user: RemoteUser
+
+    @State private var detail: RemoteProfileDetail?
+    @State private var loading = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            header
+
+            if loading {
+                HStack(spacing: Spacing.sm) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading profile…").font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, Spacing.xs)
+            } else if let detail {
+                stats(detail)
+                if let bio = detail.bio, !bio.isEmpty {
+                    Text(bio)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                fields(detail)
+            } else {
+                Text("Couldn’t load extended profile.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let url = user.profileUrl {
+                Button { NSWorkspace.shared.open(url) } label: {
+                    actionLabelRow("Open profile", systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(MenuActionButtonStyle())
+                .padding(.top, Spacing.xxs)
+            }
+        }
+        .task(id: user.service) {
+            loading = true
+            detail = await viewModel.remoteProfileDetail(for: user.service)
+            loading = false
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: Spacing.sm) {
+            AsyncImage(url: user.avatarUrl) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().scaledToFill()
+                } else {
+                    Image(systemName: "person.crop.circle.fill")
+                        .resizable()
+                        .foregroundStyle(.secondary.opacity(0.5))
+                }
+            }
+            .frame(width: 44, height: 44)
+            .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                if let full = detail?.fullName ?? user.displayNameFull, !full.isEmpty {
+                    Text(full).font(.headline).lineLimit(1)
+                }
+                Text(user.displayName)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The follower / following / repos counts, each shown only when the provider returned
+    /// it (GitLab/Bitbucket return none, so this row collapses for them).
+    @ViewBuilder
+    private func stats(_ d: RemoteProfileDetail) -> some View {
+        let items: [(String, Int)] = [
+            ("Repos", d.publicRepos),
+            ("Followers", d.followers),
+            ("Following", d.following)
+        ].compactMap { label, value in value.map { (label, $0) } }
+
+        if !items.isEmpty {
+            HStack(spacing: Spacing.md) {
+                ForEach(items, id: \.0) { label, value in
+                    VStack(spacing: 0) {
+                        Text("\(value)").font(.headline).monospacedDigit()
+                        Text(label).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func fields(_ d: RemoteProfileDetail) -> some View {
+        if let company = d.company, !company.isEmpty {
+            KeyValueRow(label: "Company", value: company)
+        }
+        if let location = d.location, !location.isEmpty {
+            KeyValueRow(label: "Location", value: location)
+        }
+        if let joined = d.joinedAt {
+            KeyValueRow(label: "Joined", value: Self.joinedFormatter.string(from: joined))
+        }
+    }
+
+    private static let joinedFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+}
+
 // MARK: - Section Container
 
 private struct SectionCard<Content: View, Accessory: View>: View {
@@ -1191,6 +1321,8 @@ private struct KeyValueRow: View {
 
 private struct RemoteRow: View {
     let user: RemoteUser
+    /// Tapping the row opens the in-popover detail screen.
+    let onTap: () -> Void
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
@@ -1221,14 +1353,13 @@ private struct RemoteRow: View {
             Text(user.service.rawValue)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
-        .onTapGesture {
-            if let url = user.profileUrl {
-                NSWorkspace.shared.open(url)
-            }
-        }
+        .onTapGesture { onTap() }
     }
 
     /// The profile avatar, with a placeholder while loading / on failure so the row

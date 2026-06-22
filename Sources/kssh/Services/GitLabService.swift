@@ -27,6 +27,25 @@ struct GitLabService {
         return try? JSONDecoder().decode(GitLabUser.self, from: data)
     }
 
+    /// Extended profile detail for the detail screen. GitLab's user endpoint returns
+    /// name, bio, organization, location, and join date; it does NOT return follower or
+    /// repo counts, so those stay nil and the UI omits them. Fetched lazily on tap.
+    static func profileDetail(pat: String, instance: String) async -> RemoteProfileDetail? {
+        guard !pat.isEmpty else { return nil }
+        let host = instance.isEmpty ? "gitlab.com" : instance
+        guard let profile = await fetchProfile(pat: pat, instance: host) else { return nil }
+        return RemoteProfileDetail(
+            fullName: profile.name,
+            bio: profile.bio,
+            company: profile.organization,
+            location: profile.location,
+            publicRepos: nil,
+            followers: nil,
+            following: nil,
+            joinedAt: ISO8601DateFormatter().date(from: profile.createdAt ?? "")
+        )
+    }
+
     /// Best-effort count of local SSH keys registered on the account; 0 on any failure.
     private static func matchedKeyCount(forKeys localKeys: [SSHKey], pat: String, instance: String) async -> Int {
         guard !localKeys.isEmpty,
@@ -106,11 +125,19 @@ private struct GitLabUser: Decodable {
     let avatarUrl: String?
     let name: String?
     let webUrl: String?
+    let bio: String?
+    let organization: String?
+    let location: String?
+    let createdAt: String?
 
     enum CodingKeys: String, CodingKey {
         case username
         case avatarUrl = "avatar_url"
         case name
         case webUrl = "web_url"
+        case bio
+        case organization
+        case location
+        case createdAt = "created_at"
     }
 }

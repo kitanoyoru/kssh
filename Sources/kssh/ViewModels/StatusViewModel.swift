@@ -383,6 +383,25 @@ final class StatusViewModel: ObservableObject {
         }
     }
 
+    /// Fetches extended profile detail for a remote, on demand (when its detail screen
+    /// opens) so the per-refresh path stays cheap. Routes to the right service using the
+    /// same credential resolution as `refresh()`. Returns nil on missing creds or failure.
+    func remoteProfileDetail(for service: RemoteService) async -> RemoteProfileDetail? {
+        switch service {
+        case .github:
+            guard let pat = token(for: .github), !pat.isEmpty else { return nil }
+            return await GitHubService.profileDetail(pat: pat)
+        case .gitlab:
+            guard let pat = token(for: .gitlab), !pat.isEmpty else { return nil }
+            return await GitLabService.profileDetail(pat: pat, instance: store.gitlabInstance)
+        case .bitbucket:
+            return await BitbucketService.profileDetail(
+                username: store.bitbucketUsername,
+                appPassword: store.bitbucketAppPassword
+            )
+        }
+    }
+
     /// A unique-ish backup subdirectory name. `Date()` is intentionally read here (the app
     /// layer), keeping the pure service code testable.
     private func trashSuffix() -> String {

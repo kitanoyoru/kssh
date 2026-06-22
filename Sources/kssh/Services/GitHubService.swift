@@ -27,6 +27,23 @@ struct GitHubService {
         return try? JSONDecoder().decode(GitHubUser.self, from: data)
     }
 
+    /// Extended profile detail (bio, repo/follower counts, join date) for the detail
+    /// screen. Fetched lazily on tap, not during the per-refresh resolution. Returns nil
+    /// on empty token or any failure.
+    static func profileDetail(pat: String) async -> RemoteProfileDetail? {
+        guard !pat.isEmpty, let profile = await fetchProfile(pat: pat) else { return nil }
+        return RemoteProfileDetail(
+            fullName: profile.name,
+            bio: profile.bio,
+            company: profile.company,
+            location: profile.location,
+            publicRepos: profile.publicRepos,
+            followers: profile.followers,
+            following: profile.following,
+            joinedAt: ISO8601DateFormatter().date(from: profile.createdAt ?? "")
+        )
+    }
+
     /// Counts local SSH keys that are registered on the account. Best-effort: returns 0
     /// if the keys endpoint fails (it must not block showing the resolved profile).
     private static func matchedKeyCount(forKeys localKeys: [SSHKey], pat: String) async -> Int {
@@ -111,11 +128,25 @@ private struct GitHubUser: Decodable {
     let avatarUrl: String?
     let name: String?
     let htmlUrl: String?
+    let bio: String?
+    let company: String?
+    let location: String?
+    let publicRepos: Int?
+    let followers: Int?
+    let following: Int?
+    let createdAt: String?
 
     enum CodingKeys: String, CodingKey {
         case login
         case avatarUrl = "avatar_url"
         case name
         case htmlUrl = "html_url"
+        case bio
+        case company
+        case location
+        case publicRepos = "public_repos"
+        case followers
+        case following
+        case createdAt = "created_at"
     }
 }
