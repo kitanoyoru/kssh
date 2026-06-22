@@ -1,16 +1,18 @@
 # kssh
 
-> SSH, Git, and GPG identity management from the macOS menu bar.
+> The macOS menu-bar app for SSH keys, Git identities, GPG, and your GitHub / GitLab / Bitbucket accounts — all in one click.
 
 [![Release](https://img.shields.io/github/v/release/kitanoyoru/kssh?sort=semver)](https://github.com/kitanoyoru/kssh/releases)
+[![Homebrew](https://img.shields.io/badge/install-brew-FBB040?logo=homebrew&logoColor=white)](#homebrew-recommended)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-5.9-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**kssh** lives in your menu bar and shows — at a glance — which SSH keys are loaded, which
-identity is active, your Git config, GPG keys, and which remote (GitHub / GitLab) the
-active key belongs to. Switch SSH identities and Git profiles in one click, without
-hand-editing `~/.ssh/config` or running `git config`.
+Juggling work and personal SSH keys, multiple Git identities, and a few GitHub/GitLab
+accounts? **kssh** puts all of it in your menu bar. See which keys are loaded, which
+identity is active, your Git and GPG config, and the remote accounts your keys belong to —
+then switch any of them in **one click**, without hand-editing `~/.ssh/config` or running
+`git config`. No daemon, no telemetry, secrets in the macOS Keychain.
 
 <p align="center">
   <img src="docs/preview.png" alt="kssh menu bar popover" width="320">
@@ -23,17 +25,23 @@ hand-editing `~/.ssh/config` or running `git config`.
 - **Switch identities** — pick a key to make it the active `IdentityFile`. kssh rewrites
   only the `Host` blocks that reference that key (never clobbering unrelated hosts) and
   reloads the agent. A timestamped backup is written before any edit.
+- **Full key lifecycle** — generate a new key (ed25519 or RSA), rename it, or delete it
+  (moved to a recoverable trash), and upload the active key to GitHub/GitLab — all from the
+  menu bar.
 - **Load / unload keys** — add a key to the agent (`ssh-add`) or remove it (`ssh-add -d`)
   without touching your config.
 - **Git profiles** — define named identities (Work, Personal, …) and switch `user.name` /
   `user.email` globally in one tap. The active profile is highlighted.
 - **GPG** — view your secret keys and create a new one (ed25519) from an in-app form.
-- **Remote status** — resolves the GitHub/GitLab profile your token belongs to (username +
-  avatar), and shows it **only when the active SSH key is registered on that account**.
-  Tokens come from Settings or fall back to `~/.netrc`.
+- **Multi-account remotes** — manage multiple **GitHub, GitLab, and Bitbucket** accounts
+  per service: add, label, switch the active one, test the connection, and edit or remove
+  it — right from the popover. Each row shows the account's avatar, username, and a profile
+  detail screen with stats and a **GitHub contribution graph**.
+- **Secure by default** — Personal Access Tokens live in the macOS Keychain; kssh also
+  falls back to the token in `~/.netrc` so existing setups just work.
 - **Copy to clipboard** — right-click any key fingerprint, public key, email, or key id.
-- **Stays out of your way** — menu-bar only (no Dock icon), with in-popover navigation for
-  profile and GPG management (no extra windows).
+- **Stays out of your way** — menu-bar only (no Dock icon), collapsible sections, optional
+  launch-at-login, and in-popover navigation (no extra windows).
 
 ## Requirements
 
@@ -94,8 +102,13 @@ Click the menu-bar key icon to open the popover:
 - **Git** — tap a profile to switch your global Git identity; **Manage profiles…** to add
   or edit them.
 - **GPG** — **Create GPG key…** to generate one (requires `gnupg`).
-- **Remote** — appears when the active key is linked to a GitHub/GitLab account. Add a
-  Personal Access Token in **Settings**, or kssh will use the token in `~/.netrc` for the host.
+- **Remote** — **Add account…** to connect a GitHub, GitLab, or Bitbucket account (pick the
+  service, paste a token). Switch the active account with its radio, right-click to test /
+  edit / remove, and tap a row to open its profile with stats and a contribution graph.
+  Tokens are stored in the Keychain; kssh also falls back to `~/.netrc`.
+
+General preferences (auto-refresh interval, launch-at-login) and a read-only account
+summary live in **Settings**.
 
 ## How it works
 
