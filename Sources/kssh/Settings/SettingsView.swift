@@ -10,11 +10,6 @@ struct SettingsView: View {
                     Label("General", systemImage: "gearshape")
                 }
 
-            accountsTab
-                .tabItem {
-                    Label("Accounts", systemImage: "person.2")
-                }
-
             aboutTab
                 .tabItem {
                     Label("About", systemImage: "info.circle")
@@ -51,55 +46,6 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             } header: {
                 Text("Security")
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    /// Read-only summary of configured remote accounts. Management (add / edit / switch /
-    /// test / delete) now lives in the menu bar's Remote section, alongside SSH keys — this
-    /// tab just reflects what's stored and points there.
-    private var accountsTab: some View {
-        Form {
-            ForEach(RemoteService.allCases, id: \.self) { service in
-                Section {
-                    let accounts = store.accounts(for: service)
-                    if accounts.isEmpty {
-                        Text("No accounts.")
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                    } else {
-                        let activeId = store.activeAccount(for: service)?.id
-                        ForEach(accounts) { account in
-                            HStack {
-                                Text(account.displayLabel)
-                                if account.id == activeId {
-                                    Text("Active")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                if service == .gitlab, let instance = account.instance,
-                                    !instance.isEmpty
-                                {
-                                    Text(instance)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text(service.rawValue)
-                }
-            }
-
-            Section {
-                Text(
-                    "Add, edit, switch, test, or remove accounts from the menu bar — click the kssh key icon, then the Remote section."
-                )
-                .font(.caption)
-                .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
