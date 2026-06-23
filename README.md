@@ -2,6 +2,7 @@
 
 > The macOS menu-bar app for SSH keys, Git identities, GPG, and your GitHub / GitLab / Bitbucket accounts — all in one click.
 
+[![CI](https://github.com/kitanoyoru/kssh/actions/workflows/ci.yml/badge.svg)](https://github.com/kitanoyoru/kssh/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/kitanoyoru/kssh?sort=semver)](https://github.com/kitanoyoru/kssh/releases)
 [![Homebrew](https://img.shields.io/badge/install-brew-FBB040?logo=homebrew&logoColor=white)](#homebrew-recommended)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)](https://www.apple.com/macos/)
@@ -89,9 +90,13 @@ Uninstall with `make uninstall`.
 ```sh
 make build          # debug build
 make run            # build and run
-make release        # release build + bundled .app under .build/release
+make release        # release build + bundled .app under .build/release (and opens it)
 make test           # run the test suite
+make lint           # check formatting/style with swift-format
+make format         # apply swift-format in place
 ```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the codebase is laid out.
 
 ## Usage
 

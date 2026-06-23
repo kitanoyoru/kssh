@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & draft release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build app bundle
+        run: make bundle
+
+      - name: Package .app
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cd .build/release
+          ditto -c -k --keepParent "kssh.app" "kssh-${version}-macos.zip"
+          shasum -a 256 "kssh-${version}-macos.zip"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            ".build/release/kssh-${version}-macos.zip" \
+            --title "kssh ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --draft

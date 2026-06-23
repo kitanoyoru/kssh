@@ -19,9 +19,14 @@ cd kssh
 make build      # debug build
 make run        # build and launch the app
 make test       # run the test suite
+make lint       # check formatting/style (swift-format) — same check CI runs
+make format     # apply swift-format in place
 ```
 
 `make release` produces a bundled `.app`; `make install` copies it to `/Applications`.
+
+For a high-level tour of how the code is organized, see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Project layout
 
@@ -39,6 +44,10 @@ Tests/ksshTests/         XCTest unit tests
 ```
 
 ## Code style
+
+Style is enforced with [`swift-format`](https://github.com/swiftlang/swift-format) against the
+repo's `.swift-format` config. Run `make format` before committing, and `make lint` to verify —
+CI fails on style violations. Beyond formatting:
 
 - **SwiftUI + design tokens.** Use the `Spacing` / `Radius` / `StatusColor` tokens and the
   existing reusable views (`SectionCard`, `KeyValueRow`, `MenuActionButtonStyle`, …) rather
@@ -64,9 +73,10 @@ tested and how.
 
 1. Branch from `master`.
 2. Keep each PR focused on one change.
-3. `make build && make test` must pass before you open the PR.
-4. Describe **what** changed and **how you verified it** (including any manual testing).
-5. If your change affects the UI, a screenshot or short clip is appreciated.
+3. `make build && make test && make lint` must pass before you open the PR.
+4. Add an entry under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for user-facing changes.
+5. Describe **what** changed and **how you verified it** (including any manual testing).
+6. If your change affects the UI, a screenshot or short clip is appreciated.
 
 ## Reporting bugs
 
@@ -81,16 +91,19 @@ kssh is distributed through a Homebrew tap at
 [kitanoyoru/homebrew-kssh](https://github.com/kitanoyoru/homebrew-kssh), whose formula
 builds from a tagged source tarball. To cut a release:
 
-1. Bump the version in the `release` target's `Info.plist` block in the `Makefile`.
-2. Tag and create the GitHub release:
+1. Bump `VERSION` in the `Makefile`, and move the `[Unreleased]` entries in
+   [CHANGELOG.md](CHANGELOG.md) under a new `vX.Y.Z` heading.
+2. Tag and push:
 
    ```sh
    git tag -a vX.Y.Z -m "kssh vX.Y.Z"
    git push origin vX.Y.Z
-   gh release create vX.Y.Z --title "kssh vX.Y.Z" --notes "..."
    ```
 
-3. Compute the source tarball's checksum:
+   The [release workflow](.github/workflows/release.yml) builds the `.app`, attaches a zipped
+   build, and opens a **draft** GitHub Release with generated notes. Review and publish it.
+
+3. Compute the source tarball's checksum (the Homebrew formula builds from source):
 
    ```sh
    curl -sL https://github.com/kitanoyoru/kssh/archive/refs/tags/vX.Y.Z.tar.gz \
