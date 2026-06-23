@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "lineLength": 100,
+  "indentation": {
+    "spaces": 4
+  },
+  "tabWidth": 4,
+  "maximumBlankLines": 1,
+  "respectsExistingLineBreaks": true,
+  "lineBreakBeforeControlFlowKeywords": false,
+  "lineBreakBeforeEachArgument": false,
+  "indentConditionalCompilationBlocks": false,
+  "prioritizeKeepingFunctionOutputTogether": true,
+  "rules": {
+    "AllPublicDeclarationsHaveDocumentation": false,
+    "AlwaysUseLowerCamelCase": true,
+    "AmbiguousTrailingClosureOverload": true,
+    "BeginDocumentationCommentWithOneLineSummary": false,
+    "DoNotUseSemicolons": true,
+    "DontRepeatTypeInStaticProperties": true,
+    "FileScopedDeclarationPrivacy": true,
+    "FullyIndirectEnum": true,
+    "GroupNumericLiterals": true,
+    "NeverForceUnwrap": false,
+    "NeverUseForceTry": false,
+    "NeverUseImplicitlyUnwrappedOptionals": false,
+    "NoAccessLevelOnExtensionDeclaration": true,
+    "NoBlockComments": false,
+    "NoLeadingUnderscores": false,
+    "OneVariableDeclarationPerLine": true,
+    "OnlyOneTrailingClosureArgument": false,
+    "OrderedImports": true,
+    "ReturnVoidInsteadOfEmptyTuple": true,
+    "UseLetInEveryBoundCaseVariable": true,
+    "UseShorthandTypeNames": true,
+    "UseSingleLinePropertyGetter": true,
+    "UseSynthesizedInitializer": true,
+    "ValidateDocumentationComments": false
+  }
+}

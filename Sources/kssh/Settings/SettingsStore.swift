@@ -139,8 +139,13 @@ final class SettingsStore: ObservableObject {
 
     /// The Bitbucket username + app password pair for a specific account.
     func bitbucketCredentials(id: String) -> (username: String, appPassword: String)? {
-        let user = KeychainManager.read(key: RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: id)) ?? ""
-        let pass = KeychainManager.read(key: RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: id)) ?? ""
+        let user =
+            KeychainManager.read(
+                key: RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: id)) ?? ""
+        let pass =
+            KeychainManager.read(
+                key: RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: id))
+            ?? ""
         guard !user.isEmpty, !pass.isEmpty else { return nil }
         return (user, pass)
     }
@@ -171,21 +176,30 @@ final class SettingsStore: ObservableObject {
     /// Adds a GitHub/GitLab account, writing its PAT to the Keychain. Becomes active if it
     /// is the first account for that service. Returns the created account, or nil if capped.
     @discardableResult
-    func addAccount(label: String, secret: String, instance: String? = nil, for service: RemoteService) -> RemoteAccount? {
+    func addAccount(
+        label: String, secret: String, instance: String? = nil, for service: RemoteService
+    ) -> RemoteAccount? {
         guard canAddAccount(for: service) else { return nil }
         let account = RemoteAccount(label: label, instance: instance)
-        KeychainManager.save(key: RemoteAccount.keychainKey(service: service, field: .pat, id: account.id), value: secret)
+        KeychainManager.save(
+            key: RemoteAccount.keychainKey(service: service, field: .pat, id: account.id),
+            value: secret)
         appendAccount(account, for: service)
         return account
     }
 
     /// Adds a Bitbucket account, writing username + app password to the Keychain.
     @discardableResult
-    func addBitbucketAccount(label: String, username: String, appPassword: String) -> RemoteAccount? {
+    func addBitbucketAccount(label: String, username: String, appPassword: String) -> RemoteAccount?
+    {
         guard canAddAccount(for: .bitbucket) else { return nil }
         let account = RemoteAccount(label: label)
-        KeychainManager.save(key: RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: account.id), value: username)
-        KeychainManager.save(key: RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: account.id), value: appPassword)
+        KeychainManager.save(
+            key: RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: account.id),
+            value: username)
+        KeychainManager.save(
+            key: RemoteAccount.keychainKey(
+                service: .bitbucket, field: .appPassword, id: account.id), value: appPassword)
         appendAccount(account, for: .bitbucket)
         return account
     }
@@ -216,13 +230,18 @@ final class SettingsStore: ObservableObject {
 
     /// Overwrites an existing account's PAT in the Keychain (GitHub/GitLab).
     func updateSecret(id: String, secret: String, for service: RemoteService) {
-        KeychainManager.save(key: RemoteAccount.keychainKey(service: service, field: .pat, id: id), value: secret)
+        KeychainManager.save(
+            key: RemoteAccount.keychainKey(service: service, field: .pat, id: id), value: secret)
     }
 
     /// Overwrites a Bitbucket account's username + app password in the Keychain.
     func updateBitbucketSecret(id: String, username: String, appPassword: String) {
-        KeychainManager.save(key: RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: id), value: username)
-        KeychainManager.save(key: RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: id), value: appPassword)
+        KeychainManager.save(
+            key: RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: id),
+            value: username)
+        KeychainManager.save(
+            key: RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: id),
+            value: appPassword)
     }
 
     /// Marks an account active for its service.
@@ -236,7 +255,8 @@ final class SettingsStore: ObservableObject {
     /// Keychain is mandatory — metadata-only removal would orphan the secret.
     func deleteAccount(id: String, for service: RemoteService) {
         for field in keychainFields(for: service) {
-            KeychainManager.delete(key: RemoteAccount.keychainKey(service: service, field: field, id: id))
+            KeychainManager.delete(
+                key: RemoteAccount.keychainKey(service: service, field: field, id: id))
         }
         var list = accounts(for: service)
         list.removeAll { $0.id == id }
@@ -292,7 +312,9 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    static func loadAccounts(_ service: RemoteService, from defaults: UserDefaults = .standard) -> [RemoteAccount] {
+    static func loadAccounts(
+        _ service: RemoteService, from defaults: UserDefaults = .standard
+    ) -> [RemoteAccount] {
         guard let data = defaults.data(forKey: accountsKey(for: service)) else { return [] }
         return (try? JSONDecoder().decode([RemoteAccount].self, from: data)) ?? []
     }
@@ -301,14 +323,19 @@ final class SettingsStore: ObservableObject {
         try? JSONEncoder().encode(accounts)
     }
 
-    static func persist(_ accounts: [RemoteAccount], for service: RemoteService, to defaults: UserDefaults = .standard) {
+    static func persist(
+        _ accounts: [RemoteAccount], for service: RemoteService,
+        to defaults: UserDefaults = .standard
+    ) {
         if let data = encodeAccounts(accounts) {
             defaults.set(data, forKey: accountsKey(for: service))
         }
     }
 
     static func loadActiveIds(from defaults: UserDefaults = .standard) -> [RemoteService: String] {
-        guard let raw = defaults.dictionary(forKey: activeAccountIdsKey) as? [String: String] else { return [:] }
+        guard let raw = defaults.dictionary(forKey: activeAccountIdsKey) as? [String: String] else {
+            return [:]
+        }
         var result: [RemoteService: String] = [:]
         for service in RemoteService.allCases {
             if let id = raw[service.rawValue] { result[service] = id }
@@ -316,7 +343,9 @@ final class SettingsStore: ObservableObject {
         return result
     }
 
-    static func persistActiveIds(_ ids: [RemoteService: String], to defaults: UserDefaults = .standard) {
+    static func persistActiveIds(
+        _ ids: [RemoteService: String], to defaults: UserDefaults = .standard
+    ) {
         var raw: [String: String] = [:]
         for (service, id) in ids { raw[service.rawValue] = id }
         defaults.set(raw, forKey: activeAccountIdsKey)
@@ -341,7 +370,8 @@ final class SettingsStore: ObservableObject {
             let pat = readKeychain("githubPat") ?? ""
             if !pat.isEmpty {
                 let account = RemoteAccount(label: "Default")
-                writeKeychain(RemoteAccount.keychainKey(service: .github, field: .pat, id: account.id), pat)
+                writeKeychain(
+                    RemoteAccount.keychainKey(service: .github, field: .pat, id: account.id), pat)
                 persist([account], for: .github, to: defaults)
                 setMigratedActive(account.id, for: .github, in: defaults)
             }
@@ -353,7 +383,8 @@ final class SettingsStore: ObservableObject {
             if !pat.isEmpty {
                 let instance = defaults.string(forKey: "gitlabInstance")
                 let account = RemoteAccount(label: "Default", instance: instance)
-                writeKeychain(RemoteAccount.keychainKey(service: .gitlab, field: .pat, id: account.id), pat)
+                writeKeychain(
+                    RemoteAccount.keychainKey(service: .gitlab, field: .pat, id: account.id), pat)
                 persist([account], for: .gitlab, to: defaults)
                 setMigratedActive(account.id, for: .gitlab, in: defaults)
             }
@@ -365,8 +396,12 @@ final class SettingsStore: ObservableObject {
             let pass = readKeychain("bitbucketAppPassword") ?? ""
             if !user.isEmpty, !pass.isEmpty {
                 let account = RemoteAccount(label: "Default")
-                writeKeychain(RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: account.id), user)
-                writeKeychain(RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: account.id), pass)
+                writeKeychain(
+                    RemoteAccount.keychainKey(
+                        service: .bitbucket, field: .username, id: account.id), user)
+                writeKeychain(
+                    RemoteAccount.keychainKey(
+                        service: .bitbucket, field: .appPassword, id: account.id), pass)
                 persist([account], for: .bitbucket, to: defaults)
                 setMigratedActive(account.id, for: .bitbucket, in: defaults)
             }
@@ -376,7 +411,9 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Writes an active id during migration, merging into the persisted dictionary.
-    private static func setMigratedActive(_ id: String, for service: RemoteService, in defaults: UserDefaults) {
+    private static func setMigratedActive(
+        _ id: String, for service: RemoteService, in defaults: UserDefaults
+    ) {
         var raw = (defaults.dictionary(forKey: activeAccountIdsKey) as? [String: String]) ?? [:]
         raw[service.rawValue] = id
         defaults.set(raw, forKey: activeAccountIdsKey)

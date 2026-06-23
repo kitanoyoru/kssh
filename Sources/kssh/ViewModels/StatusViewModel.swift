@@ -1,5 +1,5 @@
-import Foundation
 import Combine
+import Foundation
 
 @MainActor
 final class StatusViewModel: ObservableObject {
@@ -61,7 +61,7 @@ final class StatusViewModel: ObservableObject {
 
     /// Outcome of a per-account "Test" (validate credential) action.
     enum AccountTestState: Equatable {
-        case valid(String)   // associated value: the resolved display name / username
+        case valid(String)  // associated value: the resolved display name / username
         case invalid
     }
 
@@ -131,10 +131,15 @@ final class StatusViewModel: ObservableObject {
         // services see no keys and report 0 matches, which hides the rows.
         let activeKeys = activeKey(in: keys).map { [$0] } ?? []
 
-        let bitbucketCreds = store.activeAccount(for: .bitbucket).flatMap { store.bitbucketCredentials(id: $0.id) }
+        let bitbucketCreds = store.activeAccount(for: .bitbucket).flatMap {
+            store.bitbucketCredentials(id: $0.id)
+        }
         async let githubResult = GitHubService.user(forKeys: activeKeys, pat: githubToken)
-        async let gitlabResult = GitLabService.user(forKeys: activeKeys, pat: gitlabToken, instance: store.activeGitlabInstance)
-        async let bitbucketResult = BitbucketService.user(forKeys: activeKeys, username: bitbucketCreds?.username ?? "", appPassword: bitbucketCreds?.appPassword ?? "")
+        async let gitlabResult = GitLabService.user(
+            forKeys: activeKeys, pat: gitlabToken, instance: store.activeGitlabInstance)
+        async let bitbucketResult = BitbucketService.user(
+            forKeys: activeKeys, username: bitbucketCreds?.username ?? "",
+            appPassword: bitbucketCreds?.appPassword ?? "")
         let (gh, gl, bb) = await (githubResult, gitlabResult, bitbucketResult)
         githubUser = gh
         gitlabUser = gl
@@ -160,7 +165,8 @@ final class StatusViewModel: ObservableObject {
                 store.accounts(for: service).map { (service, $0) }
             }
 
-        let resolved = await withTaskGroup(of: (String, RemoteUser?).self) { group -> [String: RemoteUser] in
+        let resolved = await withTaskGroup(of: (String, RemoteUser?).self) {
+            group -> [String: RemoteUser] in
             for ref in refs {
                 let service = ref.service
                 let account = ref.account
@@ -178,7 +184,9 @@ final class StatusViewModel: ObservableObject {
     }
 
     /// Resolves the profile a specific account's credential belongs to.
-    private func user(for service: RemoteService, account: RemoteAccount, activeKeys: [SSHKey]) async -> RemoteUser? {
+    private func user(
+        for service: RemoteService, account: RemoteAccount, activeKeys: [SSHKey]
+    ) async -> RemoteUser? {
         switch service {
         case .github:
             let pat = store.secret(for: .github, id: account.id) ?? ""
@@ -189,7 +197,8 @@ final class StatusViewModel: ObservableObject {
             return await GitLabService.user(forKeys: activeKeys, pat: pat, instance: host)
         case .bitbucket:
             guard let creds = store.bitbucketCredentials(id: account.id) else { return nil }
-            return await BitbucketService.user(forKeys: activeKeys, username: creds.username, appPassword: creds.appPassword)
+            return await BitbucketService.user(
+                forKeys: activeKeys, username: creds.username, appPassword: creds.appPassword)
         }
     }
 
@@ -202,7 +211,8 @@ final class StatusViewModel: ObservableObject {
         // the config can be switched even when the agent is stopped.
         let identities = await SSHIdentityService.discover()
         availableIdentities = identities
-        activeIdentity = SSHIdentityService.activeIdentity(among: identities, selectedPath: store.activeIdentityPath)
+        activeIdentity = SSHIdentityService.activeIdentity(
+            among: identities, selectedPath: store.activeIdentityPath)
 
         // When the agent is off, the UI shows a dedicated "Agent off" section with an
         // Enable button instead of the normal sections, so no error banner is needed here.
@@ -226,7 +236,8 @@ final class StatusViewModel: ObservableObject {
             // the config layout (separate Host per key) can't express a single active key.
             store.activeIdentityPath = identity.privateKeyPath
             if result == .agentOnly {
-                notice = "Switched in the agent only — \(identity.displayName) isn't referenced in ~/.ssh/config, so the file was left unchanged."
+                notice =
+                    "Switched in the agent only — \(identity.displayName) isn't referenced in ~/.ssh/config, so the file was left unchanged."
             }
         } catch {
             self.error = error.localizedDescription
@@ -343,14 +354,17 @@ final class StatusViewModel: ObservableObject {
 
     /// Generates a new SSH keypair (create-only — not loaded into the agent, not written to
     /// config) and refreshes so it appears in the Keys list. Returns true on success.
-    func generateSSHKey(type: SSHIdentityService.KeyType, comment: String, passphrase: String) async -> Bool {
+    func generateSSHKey(
+        type: SSHIdentityService.KeyType, comment: String, passphrase: String
+    ) async -> Bool {
         guard !generatingKey else { return false }
         generatingKey = true
         keygenError = nil
         defer { generatingKey = false }
 
         do {
-            _ = try await SSHIdentityService.generateKey(type: type, comment: comment, passphrase: passphrase)
+            _ = try await SSHIdentityService.generateKey(
+                type: type, comment: comment, passphrase: passphrase)
         } catch {
             keygenError = error.localizedDescription
             return false
@@ -401,7 +415,8 @@ final class StatusViewModel: ObservableObject {
     func addActiveKeyToRemote(_ service: RemoteService) async -> Bool {
         guard addingKeyToRemote == nil else { return false }
         guard let active = activeIdentity, !active.publicKeyPath.isEmpty,
-              let pub = try? String(contentsOfFile: active.publicKeyPath, encoding: .utf8) else {
+            let pub = try? String(contentsOfFile: active.publicKeyPath, encoding: .utf8)
+        else {
             error = "No active key with a public key file to upload."
             return false
         }
@@ -421,7 +436,9 @@ final class StatusViewModel: ObservableObject {
         case .github:
             result = await GitHubService.addKey(title: title, publicKey: publicKey, pat: token)
         case .gitlab:
-            result = await GitLabService.addKey(title: title, publicKey: publicKey, pat: token, instance: store.activeGitlabInstance)
+            result = await GitLabService.addKey(
+                title: title, publicKey: publicKey, pat: token, instance: store.activeGitlabInstance
+            )
         case .bitbucket:
             error = "Adding keys to Bitbucket isn't supported yet."
             return false
@@ -444,11 +461,15 @@ final class StatusViewModel: ObservableObject {
     func token(for service: RemoteService) -> String? {
         switch service {
         case .github:
-            let pat = store.activeAccount(for: .github).flatMap { store.secret(for: .github, id: $0.id) } ?? ""
+            let pat =
+                store.activeAccount(for: .github).flatMap { store.secret(for: .github, id: $0.id) }
+                ?? ""
             return pat.isEmpty ? NetrcReader.password(forMachine: "github.com") : pat
         case .gitlab:
             let host = store.activeGitlabInstance
-            let pat = store.activeAccount(for: .gitlab).flatMap { store.secret(for: .gitlab, id: $0.id) } ?? ""
+            let pat =
+                store.activeAccount(for: .gitlab).flatMap { store.secret(for: .gitlab, id: $0.id) }
+                ?? ""
             return pat.isEmpty ? NetrcReader.password(forMachine: host) : pat
         case .bitbucket:
             return nil
@@ -457,7 +478,9 @@ final class StatusViewModel: ObservableObject {
 
     /// Extended profile detail for a SPECIFIC account, fetched lazily when its detail screen
     /// opens. Uses that account's own secret so any account (not just the active one) opens.
-    func remoteProfileDetail(for service: RemoteService, account: RemoteAccount) async -> RemoteProfileDetail? {
+    func remoteProfileDetail(
+        for service: RemoteService, account: RemoteAccount
+    ) async -> RemoteProfileDetail? {
         switch service {
         case .github:
             let pat = store.secret(for: .github, id: account.id) ?? ""
@@ -468,13 +491,16 @@ final class StatusViewModel: ObservableObject {
             return pat.isEmpty ? nil : await GitLabService.profileDetail(pat: pat, instance: host)
         case .bitbucket:
             guard let creds = store.bitbucketCredentials(id: account.id) else { return nil }
-            return await BitbucketService.profileDetail(username: creds.username, appPassword: creds.appPassword)
+            return await BitbucketService.profileDetail(
+                username: creds.username, appPassword: creds.appPassword)
         }
     }
 
     /// The contribution calendar for a specific GitHub account (nil for other services /
     /// failures), using that account's secret.
-    func contributionGraph(for service: RemoteService, account: RemoteAccount) async -> ContributionGraph? {
+    func contributionGraph(
+        for service: RemoteService, account: RemoteAccount
+    ) async -> ContributionGraph? {
         guard service == .github else { return nil }
         let pat = store.secret(for: .github, id: account.id) ?? ""
         return pat.isEmpty ? nil : await GitHubService.contributionGraph(pat: pat)
@@ -496,12 +522,16 @@ final class StatusViewModel: ObservableObject {
     }
 
     /// Adds a GitHub/GitLab account (PAT). Returns true on success.
-    func addAccount(label: String, secret: String, instance: String?, for service: RemoteService) async -> Bool {
+    func addAccount(
+        label: String, secret: String, instance: String?, for service: RemoteService
+    ) async -> Bool {
         guard addingAccount == nil else { return false }
         addingAccount = service
         accountActionError = nil
         defer { addingAccount = nil }
-        guard store.addAccount(label: label, secret: secret, instance: instance, for: service) != nil else {
+        guard
+            store.addAccount(label: label, secret: secret, instance: instance, for: service) != nil
+        else {
             accountActionError = "Couldn’t add the account (limit reached?)."
             return false
         }
@@ -515,7 +545,10 @@ final class StatusViewModel: ObservableObject {
         addingAccount = .bitbucket
         accountActionError = nil
         defer { addingAccount = nil }
-        guard store.addBitbucketAccount(label: label, username: username, appPassword: appPassword) != nil else {
+        guard
+            store.addBitbucketAccount(label: label, username: username, appPassword: appPassword)
+                != nil
+        else {
             accountActionError = "Couldn’t add the account (limit reached?)."
             return false
         }
@@ -545,7 +578,8 @@ final class StatusViewModel: ObservableObject {
         }
         if service == .bitbucket {
             if let username, let appPassword {
-                store.updateBitbucketSecret(id: account.id, username: username, appPassword: appPassword)
+                store.updateBitbucketSecret(
+                    id: account.id, username: username, appPassword: appPassword)
             }
         } else if let secret, !secret.isEmpty {
             store.updateSecret(id: account.id, secret: secret, for: service)
@@ -583,7 +617,8 @@ final class StatusViewModel: ObservableObject {
             detail = pat.isEmpty ? nil : await GitLabService.profileDetail(pat: pat, instance: host)
         case .bitbucket:
             if let creds = store.bitbucketCredentials(id: account.id) {
-                detail = await BitbucketService.profileDetail(username: creds.username, appPassword: creds.appPassword)
+                detail = await BitbucketService.profileDetail(
+                    username: creds.username, appPassword: creds.appPassword)
             } else {
                 detail = nil
             }

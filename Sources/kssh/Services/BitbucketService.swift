@@ -4,12 +4,15 @@ struct BitbucketService {
     /// Resolves the Bitbucket Cloud profile for the given credentials, scoped to the
     /// active SSH key. Returns nil when credentials are empty, the profile can't be
     /// resolved, or a network/auth error occurs — the UI hides the row in that case.
-    static func user(forKeys localKeys: [SSHKey], username: String, appPassword: String) async -> RemoteUser? {
+    static func user(
+        forKeys localKeys: [SSHKey], username: String, appPassword: String
+    ) async -> RemoteUser? {
         guard !username.isEmpty, !appPassword.isEmpty else { return nil }
 
         let auth = basicAuth(username: username, password: appPassword)
         guard let profile = await fetchProfile(auth: auth) else { return nil }
-        let matchedCount = await matchedKeyCount(forKeys: localKeys, accountId: profile.accountId, auth: auth)
+        let matchedCount = await matchedKeyCount(
+            forKeys: localKeys, accountId: profile.accountId, auth: auth)
 
         return RemoteUser(
             service: .bitbucket,
@@ -48,7 +51,9 @@ struct BitbucketService {
 
     /// Best-effort count of local SSH keys registered on the account; 0 on any failure.
     /// Follows Bitbucket's cursor-based pagination (up to 10 pages).
-    private static func matchedKeyCount(forKeys localKeys: [SSHKey], accountId: String, auth: String) async -> Int {
+    private static func matchedKeyCount(
+        forKeys localKeys: [SSHKey], accountId: String, auth: String
+    ) async -> Int {
         guard !localKeys.isEmpty else { return 0 }
         let localPublicKeys = Set(localKeys.map { normalizeKey($0.publicKey) })
 
@@ -59,7 +64,8 @@ struct BitbucketService {
         while let url = nextUrl, pageLimit > 0 {
             pageLimit -= 1
             guard let data = await get(url, auth: auth),
-                  let page = try? JSONDecoder().decode(BitbucketPage<BitbucketKey>.self, from: data) else {
+                let page = try? JSONDecoder().decode(BitbucketPage<BitbucketKey>.self, from: data)
+            else {
                 break
             }
             matched += page.values.filter { localPublicKeys.contains(normalizeKey($0.key)) }.count
@@ -75,7 +81,8 @@ struct BitbucketService {
         request.timeoutInterval = 10
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let http = response as? HTTPURLResponse, http.statusCode == 200
+        else {
             return nil
         }
         return data

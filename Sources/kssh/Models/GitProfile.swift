@@ -25,8 +25,10 @@ struct GitProfile: Codable, Identifiable, Equatable {
         guard let identity, let configName = identity.name, let configEmail = identity.email else {
             return false
         }
-        return configName.trimmingCharacters(in: .whitespacesAndNewlines) == name.trimmingCharacters(in: .whitespacesAndNewlines)
-            && configEmail.trimmingCharacters(in: .whitespacesAndNewlines) == email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return configName.trimmingCharacters(in: .whitespacesAndNewlines)
+            == name.trimmingCharacters(in: .whitespacesAndNewlines)
+            && configEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+                == email.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Pure matcher (testable): the first stored profile that matches the current identity.

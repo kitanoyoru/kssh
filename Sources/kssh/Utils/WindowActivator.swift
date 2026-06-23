@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 /// Helpers for surfacing windows from an accessory (`LSUIElement`) menu-bar app.
 ///

@@ -54,21 +54,24 @@ struct GitHubService {
     }
 
     private static let contributionQuery = """
-    query { viewer { contributionsCollection { contributionCalendar { \
-    weeks { contributionDays { date contributionCount } } } } } }
-    """
+        query { viewer { contributionsCollection { contributionCalendar { \
+        weeks { contributionDays { date contributionCount } } } } } }
+        """
 
     /// Pure, testable decoder for the GraphQL contribution-calendar response. Maps each
     /// day's count into a 0–4 level via `ContributionGraph.level(forCount:)`. Returns nil
     /// if the payload is missing the expected shape or carries `errors`.
     static func parseContributionCalendar(_ data: Data) -> ContributionGraph? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
         if root["errors"] != nil { return nil }
         guard let dataObj = root["data"] as? [String: Any],
-              let viewer = dataObj["viewer"] as? [String: Any],
-              let collection = viewer["contributionsCollection"] as? [String: Any],
-              let calendar = collection["contributionCalendar"] as? [String: Any],
-              let weeksRaw = calendar["weeks"] as? [[String: Any]] else { return nil }
+            let viewer = dataObj["viewer"] as? [String: Any],
+            let collection = viewer["contributionsCollection"] as? [String: Any],
+            let calendar = collection["contributionCalendar"] as? [String: Any],
+            let weeksRaw = calendar["weeks"] as? [[String: Any]]
+        else { return nil }
 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withFullDate]
@@ -77,9 +80,11 @@ struct GitHubService {
             let days = (week["contributionDays"] as? [[String: Any]]) ?? []
             return days.compactMap { day -> ContributionDay? in
                 guard let dateStr = day["date"] as? String,
-                      let date = formatter.date(from: dateStr),
-                      let count = day["contributionCount"] as? Int else { return nil }
-                return ContributionDay(date: date, count: count, level: ContributionGraph.level(forCount: count))
+                    let date = formatter.date(from: dateStr),
+                    let count = day["contributionCount"] as? Int
+                else { return nil }
+                return ContributionDay(
+                    date: date, count: count, level: ContributionGraph.level(forCount: count))
             }
         }
         return ContributionGraph(weeks: weeks)
@@ -98,7 +103,8 @@ struct GitHubService {
         request.timeoutInterval = 10
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let http = response as? HTTPURLResponse, http.statusCode == 200
+        else {
             return nil
         }
         return data
@@ -108,9 +114,10 @@ struct GitHubService {
     /// if the keys endpoint fails (it must not block showing the resolved profile).
     private static func matchedKeyCount(forKeys localKeys: [SSHKey], pat: String) async -> Int {
         guard !localKeys.isEmpty,
-              let url = URL(string: "https://api.github.com/user/keys"),
-              let data = await get(url, pat: pat),
-              let keys = try? JSONDecoder().decode([GitHubKey].self, from: data) else {
+            let url = URL(string: "https://api.github.com/user/keys"),
+            let data = await get(url, pat: pat),
+            let keys = try? JSONDecoder().decode([GitHubKey].self, from: data)
+        else {
             return 0
         }
         let localPublicKeys = Set(localKeys.map { normalizeKey($0.publicKey) })
@@ -120,14 +127,17 @@ struct GitHubService {
     /// Registers `publicKey` on the token's account via `POST /user/keys`. 201 = created;
     /// a 422 (GitHub's "key is already in use") maps to `.alreadyExists` so the UI can show
     /// a friendly message instead of a raw status code.
-    static func addKey(title: String, publicKey: String, pat: String) async -> Result<Void, RemoteKeyError> {
+    static func addKey(
+        title: String, publicKey: String, pat: String
+    ) async -> Result<Void, RemoteKeyError> {
         guard !pat.isEmpty else { return .failure(.noToken) }
         guard let request = addKeyRequest(title: title, publicKey: publicKey, pat: pat) else {
             return .failure(.network)
         }
 
         guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else {
+            let http = response as? HTTPURLResponse
+        else {
             return .failure(.network)
         }
         switch http.statusCode {
@@ -147,7 +157,9 @@ struct GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("kssh", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["title": title, "key": publicKey])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": title, "key": publicKey,
+        ])
         request.timeoutInterval = 10
         return request
     }
@@ -161,7 +173,8 @@ struct GitHubService {
         request.timeoutInterval = 10
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let http = response as? HTTPURLResponse, http.statusCode == 200
+        else {
             return nil
         }
         return data

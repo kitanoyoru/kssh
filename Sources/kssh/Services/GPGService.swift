@@ -5,7 +5,8 @@ struct GPGService {
         let gpgAvailable = await ProcessRunner.checkAvailable("gpg")
         guard gpgAvailable else { return nil }
 
-        let result = await ProcessRunner.run("gpg", arguments: ["--list-secret-keys", "--keyid-format", "LONG"])
+        let result = await ProcessRunner.run(
+            "gpg", arguments: ["--list-secret-keys", "--keyid-format", "LONG"])
         guard let output = result, output.exitCode == 0 else { return nil }
 
         var keys: [GPGKey] = []
@@ -31,7 +32,8 @@ struct GPGService {
                     .replacingOccurrences(of: "[full]", with: "")
                     .replacingOccurrences(of: "[unknown]", with: "")
                 if let bracketRange = uid.range(of: "]") {
-                    uid = String(uid[bracketRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    uid = String(uid[bracketRange.upperBound...]).trimmingCharacters(
+                        in: .whitespaces)
                 } else if let spaceIndex = uid.firstIndex(of: " ") {
                     uid = String(uid[spaceIndex...]).trimmingCharacters(in: .whitespaces)
                 }
@@ -70,7 +72,8 @@ struct GPGService {
             case .generationFailed(let msg):
                 return "GPG key generation failed: \(msg)"
             case .timedOut:
-                return "GPG key generation timed out. Move the mouse or type to generate entropy, then retry."
+                return
+                    "GPG key generation timed out. Move the mouse or type to generate entropy, then retry."
             }
         }
     }
@@ -78,7 +81,9 @@ struct GPGService {
     /// Pure, testable builder for the `gpg --quick-generate-key` argument vector.
     /// `expiryYears <= 0` means no expiry ("0"). An empty passphrase produces an
     /// unprotected key (passed inline with loopback pinentry — no interactive prompt).
-    static func gpgKeygenArguments(name: String, email: String, passphrase: String, expiryYears: Int = 0) -> [String] {
+    static func gpgKeygenArguments(
+        name: String, email: String, passphrase: String, expiryYears: Int = 0
+    ) -> [String] {
         let userId = "\(name) <\(email)>"
         let expiry = expiryYears <= 0 ? "0" : "\(expiryYears)y"
         return [
@@ -88,7 +93,7 @@ struct GPGService {
             "--quick-generate-key", userId,
             "ed25519",
             "cert,sign",
-            expiry
+            expiry,
         ]
     }
 
@@ -103,7 +108,8 @@ struct GPGService {
             throw GPGServiceError.timedOut
         }
         guard result.exitCode == 0 else {
-            throw GPGServiceError.generationFailed(result.output.isEmpty ? "exit \(result.exitCode)" : result.output)
+            throw GPGServiceError.generationFailed(
+                result.output.isEmpty ? "exit \(result.exitCode)" : result.output)
         }
 
         let refreshed = await identity()

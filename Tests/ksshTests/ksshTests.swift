@@ -1,19 +1,25 @@
 import XCTest
+
 @testable import kssh
 
 final class SSHKeyTests: XCTestCase {
     func testShortFingerprint() {
-        let key = SSHKey(keyType: "ED25519", fingerprint: "SHA256:viBhKYLkY2AqOzOjBcjoJcLqLL3IHDdq1AKeBa+iikg", comment: "test@host", publicKey: "ssh-ed25519 AAA...")
+        let key = SSHKey(
+            keyType: "ED25519", fingerprint: "SHA256:viBhKYLkY2AqOzOjBcjoJcLqLL3IHDdq1AKeBa+iikg",
+            comment: "test@host", publicKey: "ssh-ed25519 AAA...")
         XCTAssertEqual(key.shortFingerprint, "viBhKYLkY2AqOzOjBcjoJcLqLL3IHDdq1AKeBa+iikg")
     }
 
     func testFingerprintPrefix() {
-        let key = SSHKey(keyType: "ED25519", fingerprint: "SHA256:viBhKYLkY2AqOzOjBcjoJcLqLL3IHDdq1AKeBa+iikg", comment: "test@host", publicKey: "ssh-ed25519 AAA...")
+        let key = SSHKey(
+            keyType: "ED25519", fingerprint: "SHA256:viBhKYLkY2AqOzOjBcjoJcLqLL3IHDdq1AKeBa+iikg",
+            comment: "test@host", publicKey: "ssh-ed25519 AAA...")
         XCTAssertEqual(key.fingerprintPrefix, "viBhKYLkY2AqOzOj")
     }
 
     func testIsLoaded() {
-        let key = SSHKey(keyType: "ED25519", fingerprint: "SHA256:abc123", comment: "", publicKey: "")
+        let key = SSHKey(
+            keyType: "ED25519", fingerprint: "SHA256:abc123", comment: "", publicKey: "")
         XCTAssertTrue(key.isLoaded)
     }
 }
@@ -26,10 +32,10 @@ final class SSHServiceTests: XCTestCase {
 
     func testParseAgentSocket() {
         let output = """
-        SSH_AUTH_SOCK=/var/folders/xx/agent.12345; export SSH_AUTH_SOCK;
-        SSH_AGENT_PID=12346; export SSH_AGENT_PID;
-        echo Agent pid 12346;
-        """
+            SSH_AUTH_SOCK=/var/folders/xx/agent.12345; export SSH_AUTH_SOCK;
+            SSH_AGENT_PID=12346; export SSH_AGENT_PID;
+            echo Agent pid 12346;
+            """
         XCTAssertEqual(SSHService.parseAgentSocket(from: output), "/var/folders/xx/agent.12345")
     }
 
@@ -41,7 +47,8 @@ final class SSHServiceTests: XCTestCase {
 
 final class GitIdentityTests: XCTestCase {
     func testIsConfigured() {
-        let configured = GitIdentity(name: "Test", email: "test@test.com", signingKey: nil, signCommits: false)
+        let configured = GitIdentity(
+            name: "Test", email: "test@test.com", signingKey: nil, signCommits: false)
         XCTAssertTrue(configured.isConfigured)
 
         let notConfigured = GitIdentity(name: nil, email: nil, signingKey: nil, signCommits: false)
@@ -70,15 +77,17 @@ final class GPGIdentityTests: XCTestCase {
 final class SSHIdentityTransformTests: XCTestCase {
     private func identity(_ name: String) -> SSHIdentity {
         let path = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/\(name)")
-        return SSHIdentity(privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "x")
+        return SSHIdentity(
+            privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "",
+            fingerprint: "x")
     }
 
     private let config = """
-    Host github.com
-    \tUser git
-      #IdentityFile ~/.ssh/personal
-      IdentityFile ~/.ssh/work
-    """
+        Host github.com
+        \tUser git
+          #IdentityFile ~/.ssh/personal
+          IdentityFile ~/.ssh/work
+        """
 
     func testActivatesCommentedKeyAndCommentsActive() {
         let result = SSHIdentityService.transform(config: config, activating: identity("personal"))
@@ -108,14 +117,14 @@ final class SSHIdentityTransformTests: XCTestCase {
     func testLeavesUnrelatedHostBlocksUntouched() {
         // Regression: switching a github key must NOT rewrite gitlab's working config.
         let cfg = """
-        Host github.com
-          IdentityFile ~/.ssh/work
-          #IdentityFile ~/.ssh/personal
+            Host github.com
+              IdentityFile ~/.ssh/work
+              #IdentityFile ~/.ssh/personal
 
-        Host gitlab.example.com
-          IdentityFile ~/.ssh/work
-          #IdentityFile ~/.ssh/study
-        """
+            Host gitlab.example.com
+              IdentityFile ~/.ssh/work
+              #IdentityFile ~/.ssh/study
+            """
         let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
         // github block: personal activated, work commented.
         XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/personal"))
@@ -132,30 +141,30 @@ final class SSHIdentityTransformTests: XCTestCase {
         // blocks for the SAME host pattern must compete: activating one deactivates the
         // other, while unrelated hosts stay untouched.
         let cfg = """
-        Host github.com
-          IdentityFile ~/.ssh/work
+            Host github.com
+              IdentityFile ~/.ssh/work
 
-        Host github.com
-          IdentityFile ~/.ssh/personal
+            Host github.com
+              IdentityFile ~/.ssh/personal
 
-        Host gitlab.com
-          IdentityFile ~/.ssh/study
-        """
+            Host gitlab.com
+              IdentityFile ~/.ssh/study
+            """
         let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
-        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/personal"))   // chosen stays active
-        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/work"))    // sibling deactivated
-        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/study"))     // unrelated host untouched
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/personal"))  // chosen stays active
+        XCTAssertTrue(result.contains("  #IdentityFile ~/.ssh/work"))  // sibling deactivated
+        XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/study"))  // unrelated host untouched
         XCTAssertFalse(result.contains("#IdentityFile ~/.ssh/study"))
     }
 
     func testIncludeDirectivesPreservedAndIgnored() {
         let cfg = """
-        Include ~/.orbstack/ssh/config
+            Include ~/.orbstack/ssh/config
 
-        Host github.com
-          IdentityFile ~/.ssh/work
-          #IdentityFile ~/.ssh/personal
-        """
+            Host github.com
+              IdentityFile ~/.ssh/work
+              #IdentityFile ~/.ssh/personal
+            """
         let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
         XCTAssertTrue(result.contains("Include ~/.orbstack/ssh/config"))
         XCTAssertTrue(result.contains("  IdentityFile ~/.ssh/personal"))
@@ -171,7 +180,7 @@ final class SSHIdentityTransformTests: XCTestCase {
     func testCRLFConfigTogglesAndStaysCRLF() {
         let cfg = "Host github.com\r\n  IdentityFile ~/.ssh/work\r\n  #IdentityFile ~/.ssh/personal"
         let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
-        XCTAssertTrue(result.contains("\r\n"))                                        // round-trips CRLF
+        XCTAssertTrue(result.contains("\r\n"))  // round-trips CRLF
         XCTAssertTrue(result.contains("\r\n  IdentityFile ~/.ssh/personal"))
         XCTAssertTrue(result.contains("\r\n  #IdentityFile ~/.ssh/work"))
     }
@@ -203,12 +212,12 @@ final class SSHIdentityTransformTests: XCTestCase {
         // The Match block references the target; the preceding Host block does not and
         // must be left fully untouched (its work stays active, not commented).
         let cfg = """
-        Host github.com
-          IdentityFile ~/.ssh/work
+            Host github.com
+              IdentityFile ~/.ssh/work
 
-        Match host gitlab.com
-          IdentityFile ~/.ssh/personal
-        """
+            Match host gitlab.com
+              IdentityFile ~/.ssh/personal
+            """
         let result = SSHIdentityService.transform(config: cfg, activating: identity("personal"))
         XCTAssertTrue(result.contains("Host github.com\n  IdentityFile ~/.ssh/work"))
         XCTAssertFalse(result.contains("#IdentityFile ~/.ssh/work"))
@@ -228,17 +237,19 @@ final class SSHIdentityTransformTests: XCTestCase {
 final class ActiveIdentityTests: XCTestCase {
     private func identity(_ name: String) -> SSHIdentity {
         let path = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/\(name)")
-        return SSHIdentity(privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "x")
+        return SSHIdentity(
+            privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "",
+            fingerprint: "x")
     }
 
     func testPrefersSpecificHostOverWildcard() {
         let cfg = """
-        Host *
-          IdentityFile ~/.ssh/work
+            Host *
+              IdentityFile ~/.ssh/work
 
-        Host github.com
-          IdentityFile ~/.ssh/personal
-        """
+            Host github.com
+              IdentityFile ~/.ssh/personal
+            """
         let ids = [identity("work"), identity("personal")]
         XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, in: cfg)?.name, "personal")
     }
@@ -260,48 +271,58 @@ final class ActiveIdentityTests: XCTestCase {
     // always reports the first specific block's key. An explicit user selection must win.
     func testSelectedPathWinsOverConfigInPerHostLayout() {
         let cfg = """
-        Host github.com
-          IdentityFile ~/.ssh/work
+            Host github.com
+              IdentityFile ~/.ssh/work
 
-        Host gitlab.com
-          IdentityFile ~/.ssh/personal
-        """
+            Host gitlab.com
+              IdentityFile ~/.ssh/personal
+            """
         let ids = [identity("work"), identity("personal")]
         // No selection → config resolution picks the first specific block (work).
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: nil, in: cfg)?.name, "work")
+        XCTAssertEqual(
+            SSHIdentityService.activeIdentity(among: ids, selectedPath: nil, in: cfg)?.name, "work")
         // Selecting personal is honored even though it sits in a later host block.
         let keyB = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/personal")
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: keyB, in: cfg)?.name, "personal")
+        XCTAssertEqual(
+            SSHIdentityService.activeIdentity(among: ids, selectedPath: keyB, in: cfg)?.name,
+            "personal")
     }
 
     func testStaleSelectionFallsBackToConfig() {
         let cfg = "Host github.com\n  IdentityFile ~/.ssh/work"
         let ids = [identity("work")]
         let gone = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/deleted")
-        XCTAssertEqual(SSHIdentityService.activeIdentity(among: ids, selectedPath: gone, in: cfg)?.name, "work")
+        XCTAssertEqual(
+            SSHIdentityService.activeIdentity(among: ids, selectedPath: gone, in: cfg)?.name, "work"
+        )
     }
 }
 
 final class GPGKeygenArgumentTests: XCTestCase {
     func testBuildsQuickGenerateArgs() {
         let args = GPGService.gpgKeygenArguments(name: "Ada", email: "ada@x.io", passphrase: "")
-        XCTAssertEqual(args, [
-            "--batch", "--pinentry-mode", "loopback",
-            "--passphrase", "",
-            "--quick-generate-key", "Ada <ada@x.io>",
-            "ed25519", "cert,sign", "0"
-        ])
+        XCTAssertEqual(
+            args,
+            [
+                "--batch", "--pinentry-mode", "loopback",
+                "--passphrase", "",
+                "--quick-generate-key", "Ada <ada@x.io>",
+                "ed25519", "cert,sign", "0",
+            ])
     }
 
     func testExpiryFormatting() {
-        let noExpiry = GPGService.gpgKeygenArguments(name: "A", email: "a@b.c", passphrase: "", expiryYears: 0)
+        let noExpiry = GPGService.gpgKeygenArguments(
+            name: "A", email: "a@b.c", passphrase: "", expiryYears: 0)
         XCTAssertEqual(noExpiry.last, "0")
-        let twoYears = GPGService.gpgKeygenArguments(name: "A", email: "a@b.c", passphrase: "", expiryYears: 2)
+        let twoYears = GPGService.gpgKeygenArguments(
+            name: "A", email: "a@b.c", passphrase: "", expiryYears: 2)
         XCTAssertEqual(twoYears.last, "2y")
     }
 
     func testUserIdComposition() {
-        let args = GPGService.gpgKeygenArguments(name: "Grace Hopper", email: "grace@navy.mil", passphrase: "x")
+        let args = GPGService.gpgKeygenArguments(
+            name: "Grace Hopper", email: "grace@navy.mil", passphrase: "x")
         XCTAssertTrue(args.contains("Grace Hopper <grace@navy.mil>"))
     }
 
@@ -321,9 +342,15 @@ final class GPGKeygenArgumentTests: XCTestCase {
 final class StatusViewModelLoadedTests: XCTestCase {
     func testIsLoadedMatchesFingerprint() {
         let vm = StatusViewModel()
-        vm.sshKeys = [SSHKey(keyType: "ED25519", fingerprint: "SHA256:abc", comment: "", publicKey: "")]
-        let match = SSHIdentity(privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "SHA256:abc")
-        let other = SSHIdentity(privateKeyPath: "/k2", publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "SHA256:zzz")
+        vm.sshKeys = [
+            SSHKey(keyType: "ED25519", fingerprint: "SHA256:abc", comment: "", publicKey: "")
+        ]
+        let match = SSHIdentity(
+            privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "",
+            fingerprint: "SHA256:abc")
+        let other = SSHIdentity(
+            privateKeyPath: "/k2", publicKeyPath: "", keyType: "ED25519", comment: "",
+            fingerprint: "SHA256:zzz")
         XCTAssertTrue(vm.isLoaded(match))
         XCTAssertFalse(vm.isLoaded(other))
     }
@@ -331,10 +358,15 @@ final class StatusViewModelLoadedTests: XCTestCase {
     func testActiveKeyResolvesByFingerprint() {
         let vm = StatusViewModel()
         let loaded = [
-            SSHKey(keyType: "ED25519", fingerprint: "SHA256:abc", comment: "", publicKey: "ssh-ed25519 AAA"),
-            SSHKey(keyType: "RSA", fingerprint: "SHA256:def", comment: "", publicKey: "ssh-rsa BBB")
+            SSHKey(
+                keyType: "ED25519", fingerprint: "SHA256:abc", comment: "",
+                publicKey: "ssh-ed25519 AAA"),
+            SSHKey(
+                keyType: "RSA", fingerprint: "SHA256:def", comment: "", publicKey: "ssh-rsa BBB"),
         ]
-        vm.activeIdentity = SSHIdentity(privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "SHA256:def")
+        vm.activeIdentity = SSHIdentity(
+            privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "",
+            fingerprint: "SHA256:def")
         XCTAssertEqual(vm.activeKey(in: loaded)?.fingerprint, "SHA256:def")
 
         // No active identity → nil.
@@ -342,7 +374,9 @@ final class StatusViewModelLoadedTests: XCTestCase {
         XCTAssertNil(vm.activeKey(in: loaded))
 
         // Active identity whose key isn't loaded → nil.
-        vm.activeIdentity = SSHIdentity(privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "SHA256:notloaded")
+        vm.activeIdentity = SSHIdentity(
+            privateKeyPath: "/k", publicKeyPath: "", keyType: "ED25519", comment: "",
+            fingerprint: "SHA256:notloaded")
         XCTAssertNil(vm.activeKey(in: loaded))
     }
 }
@@ -350,7 +384,9 @@ final class StatusViewModelLoadedTests: XCTestCase {
 final class SSHAddArgumentTests: XCTestCase {
     private func identity(_ name: String) -> SSHIdentity {
         let path = (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/\(name)")
-        return SSHIdentity(privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "", fingerprint: "x")
+        return SSHIdentity(
+            privateKeyPath: path, publicKeyPath: "", keyType: "ED25519", comment: "",
+            fingerprint: "x")
     }
 
     func testUnloadArguments() {
@@ -359,7 +395,8 @@ final class SSHAddArgumentTests: XCTestCase {
     }
 
     func testUnloadFailedErrorMessage() {
-        let desc = SSHIdentityService.ActivationError.agentUnloadFailed("nope").errorDescription ?? ""
+        let desc =
+            SSHIdentityService.ActivationError.agentUnloadFailed("nope").errorDescription ?? ""
         XCTAssertTrue(desc.contains("unload"))
     }
 }
@@ -385,20 +422,22 @@ final class ClipboardSelectionTests: XCTestCase {
 final class NetrcReaderTests: XCTestCase {
     func testSingleMachineOnOneLine() {
         let netrc = "machine github.com login me password ghp_abc123"
-        XCTAssertEqual(NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_abc123")
+        XCTAssertEqual(
+            NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_abc123")
     }
 
     func testMultiLineMachine() {
         let netrc = """
-        machine github.com
-          login me
-          password ghp_token
-        machine gitlab.com
-          login other
-          password glpat_token
-        """
+            machine github.com
+              login me
+              password ghp_token
+            machine gitlab.com
+              login other
+              password glpat_token
+            """
         XCTAssertEqual(NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_token")
-        XCTAssertEqual(NetrcReader.password(forMachine: "gitlab.com", contents: netrc), "glpat_token")
+        XCTAssertEqual(
+            NetrcReader.password(forMachine: "gitlab.com", contents: netrc), "glpat_token")
     }
 
     func testUnknownMachineReturnsNil() {
@@ -408,18 +447,21 @@ final class NetrcReaderTests: XCTestCase {
 
     func testCommentsIgnored() {
         let netrc = """
-        # my creds
-        machine github.com login me password ghp_xyz  # inline note
-        """
+            # my creds
+            machine github.com login me password ghp_xyz  # inline note
+            """
         XCTAssertEqual(NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_xyz")
     }
 
     func testDefaultActsAsFallback() {
-        let netrc = "machine github.com login me password ghp_specific\ndefault login anon password fallback_tok"
+        let netrc =
+            "machine github.com login me password ghp_specific\ndefault login anon password fallback_tok"
         // Specific machine wins (matched first).
-        XCTAssertEqual(NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_specific")
+        XCTAssertEqual(
+            NetrcReader.password(forMachine: "github.com", contents: netrc), "ghp_specific")
         // An unlisted machine falls through to default.
-        XCTAssertEqual(NetrcReader.password(forMachine: "gitlab.com", contents: netrc), "fallback_tok")
+        XCTAssertEqual(
+            NetrcReader.password(forMachine: "gitlab.com", contents: netrc), "fallback_tok")
     }
 
     func testEmptyContents() {
@@ -438,23 +480,36 @@ final class GitProfileTests: XCTestCase {
 
     func testMatches() {
         let profile = GitProfile(name: "Ada", email: "ada@x.io")
-        XCTAssertTrue(profile.matches(GitIdentity(name: "Ada", email: "ada@x.io", signingKey: nil, signCommits: false)))
-        XCTAssertFalse(profile.matches(GitIdentity(name: "Bob", email: "ada@x.io", signingKey: nil, signCommits: false)))
+        XCTAssertTrue(
+            profile.matches(
+                GitIdentity(name: "Ada", email: "ada@x.io", signingKey: nil, signCommits: false)))
+        XCTAssertFalse(
+            profile.matches(
+                GitIdentity(name: "Bob", email: "ada@x.io", signingKey: nil, signCommits: false)))
         XCTAssertFalse(profile.matches(nil))
-        XCTAssertFalse(profile.matches(GitIdentity(name: "Ada", email: nil, signingKey: nil, signCommits: false)))
+        XCTAssertFalse(
+            profile.matches(
+                GitIdentity(name: "Ada", email: nil, signingKey: nil, signCommits: false)))
     }
 
     func testMatchesTrimsWhitespace() {
         let profile = GitProfile(name: "Ada ", email: " ada@x.io")
-        XCTAssertTrue(profile.matches(GitIdentity(name: "Ada", email: "ada@x.io", signingKey: nil, signCommits: false)))
+        XCTAssertTrue(
+            profile.matches(
+                GitIdentity(name: "Ada", email: "ada@x.io", signingKey: nil, signCommits: false)))
     }
 
     func testActiveInList() {
         let a = GitProfile(name: "Work", email: "me@work.com")
         let b = GitProfile(name: "Study", email: "me@uni.edu")
-        let identity = GitIdentity(name: "Study", email: "me@uni.edu", signingKey: nil, signCommits: false)
+        let identity = GitIdentity(
+            name: "Study", email: "me@uni.edu", signingKey: nil, signCommits: false)
         XCTAssertEqual(GitProfile.active(in: [a, b], matching: identity)?.id, b.id)
-        XCTAssertNil(GitProfile.active(in: [a, b], matching: GitIdentity(name: "X", email: "x@x.com", signingKey: nil, signCommits: false)))
+        XCTAssertNil(
+            GitProfile.active(
+                in: [a, b],
+                matching: GitIdentity(
+                    name: "X", email: "x@x.com", signingKey: nil, signCommits: false)))
         XCTAssertNil(GitProfile.active(in: [], matching: identity))
     }
 }
@@ -462,7 +517,9 @@ final class GitProfileTests: XCTestCase {
 final class SettingsStoreProfileTests: XCTestCase {
     func testEncodeDecodeRoundTrip() {
         let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
-        let profiles = [GitProfile(name: "Work", email: "w@x.com"), GitProfile(name: "Study", email: "s@x.com")]
+        let profiles = [
+            GitProfile(name: "Work", email: "w@x.com"), GitProfile(name: "Study", email: "s@x.com"),
+        ]
         let data = SettingsStore.encodeProfiles(profiles)!
         defaults.set(data, forKey: "gitProfiles")
         XCTAssertEqual(SettingsStore.loadProfiles(from: defaults), profiles)
@@ -515,12 +572,19 @@ final class RemoteAccountTests: XCTestCase {
     }
 
     func testKeychainKeyDerivation() {
-        XCTAssertEqual(RemoteAccount.keychainKey(service: .github, field: .pat, id: "abc"), "github.pat.abc")
-        XCTAssertEqual(RemoteAccount.keychainKey(service: .gitlab, field: .pat, id: "abc"), "gitlab.pat.abc")
-        XCTAssertEqual(RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: "abc"), "bitbucket.username.abc")
-        XCTAssertEqual(RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: "abc"), "bitbucket.apppassword.abc")
+        XCTAssertEqual(
+            RemoteAccount.keychainKey(service: .github, field: .pat, id: "abc"), "github.pat.abc")
+        XCTAssertEqual(
+            RemoteAccount.keychainKey(service: .gitlab, field: .pat, id: "abc"), "gitlab.pat.abc")
+        XCTAssertEqual(
+            RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: "abc"),
+            "bitbucket.username.abc")
+        XCTAssertEqual(
+            RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: "abc"),
+            "bitbucket.apppassword.abc")
         // Collision-free against the legacy flat keys.
-        XCTAssertNotEqual(RemoteAccount.keychainKey(service: .github, field: .pat, id: "abc"), "githubPat")
+        XCTAssertNotEqual(
+            RemoteAccount.keychainKey(service: .github, field: .pat, id: "abc"), "githubPat")
     }
 
     func testResolveActiveExplicit() {
@@ -576,13 +640,20 @@ final class RemoteAccountTests: XCTestCase {
             XCTAssertEqual(SettingsStore.loadActiveIds(from: defaults)[service], accounts.first?.id)
         }
         // GitLab instance seeded from legacy AppStorage value.
-        XCTAssertEqual(SettingsStore.loadAccounts(.gitlab, from: defaults).first?.instance, "gitlab.example.com")
+        XCTAssertEqual(
+            SettingsStore.loadAccounts(.gitlab, from: defaults).first?.instance,
+            "gitlab.example.com")
         // Secrets written under the new derived keys.
         let ghId = SettingsStore.loadAccounts(.github, from: defaults).first!.id
-        XCTAssertEqual(written[RemoteAccount.keychainKey(service: .github, field: .pat, id: ghId)], "gh_token")
+        XCTAssertEqual(
+            written[RemoteAccount.keychainKey(service: .github, field: .pat, id: ghId)], "gh_token")
         let bbId = SettingsStore.loadAccounts(.bitbucket, from: defaults).first!.id
-        XCTAssertEqual(written[RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: bbId)], "bbuser")
-        XCTAssertEqual(written[RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: bbId)], "bbpass")
+        XCTAssertEqual(
+            written[RemoteAccount.keychainKey(service: .bitbucket, field: .username, id: bbId)],
+            "bbuser")
+        XCTAssertEqual(
+            written[RemoteAccount.keychainKey(service: .bitbucket, field: .appPassword, id: bbId)],
+            "bbpass")
         // Flag set.
         XCTAssertTrue(defaults.bool(forKey: "migratedToMultiAccount"))
     }
@@ -591,7 +662,8 @@ final class RemoteAccountTests: XCTestCase {
         let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
         // Only GitHub has a token; GitLab empty; Bitbucket has username but no password.
         let legacy: [String: String] = ["githubPat": "gh", "bitbucketUsername": "u"]
-        SettingsStore.migrateLegacyAccounts(in: defaults, readKeychain: { legacy[$0] }, writeKeychain: { _, _ in })
+        SettingsStore.migrateLegacyAccounts(
+            in: defaults, readKeychain: { legacy[$0] }, writeKeychain: { _, _ in })
 
         XCTAssertEqual(SettingsStore.loadAccounts(.github, from: defaults).count, 1)
         XCTAssertEqual(SettingsStore.loadAccounts(.gitlab, from: defaults).count, 0)
@@ -601,11 +673,13 @@ final class RemoteAccountTests: XCTestCase {
     func testMigrationIsIdempotent() {
         let defaults = UserDefaults(suiteName: "kssh.test.\(UUID().uuidString)")!
         let legacy: [String: String] = ["githubPat": "gh"]
-        SettingsStore.migrateLegacyAccounts(in: defaults, readKeychain: { legacy[$0] }, writeKeychain: { _, _ in })
+        SettingsStore.migrateLegacyAccounts(
+            in: defaults, readKeychain: { legacy[$0] }, writeKeychain: { _, _ in })
         let firstId = SettingsStore.loadAccounts(.github, from: defaults).first?.id
 
         // Second run is a no-op (flag gates it) — even if legacy keys change.
-        SettingsStore.migrateLegacyAccounts(in: defaults, readKeychain: { _ in "different" }, writeKeychain: { _, _ in })
+        SettingsStore.migrateLegacyAccounts(
+            in: defaults, readKeychain: { _ in "different" }, writeKeychain: { _, _ in })
         XCTAssertEqual(SettingsStore.loadAccounts(.github, from: defaults).count, 1)
         XCTAssertEqual(SettingsStore.loadAccounts(.github, from: defaults).first?.id, firstId)
     }
@@ -627,7 +701,8 @@ final class ContributionGraphTests: XCTestCase {
         let graph = ContributionGraph(weeks: weeks)
         XCTAssertEqual(graph.recent(weeks: 13).weeks.count, 13)
         // Fewer weeks than requested → unchanged.
-        XCTAssertEqual(ContributionGraph(weeks: Array(weeks.prefix(5))).recent(weeks: 13).weeks.count, 5)
+        XCTAssertEqual(
+            ContributionGraph(weeks: Array(weeks.prefix(5))).recent(weeks: 13).weeks.count, 5)
     }
 
     func testTotalContributions() {
@@ -640,18 +715,18 @@ final class ContributionGraphTests: XCTestCase {
 
     func testParseContributionCalendar() {
         let json = """
-        {"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"weeks":[
-        {"contributionDays":[{"date":"2026-01-04","contributionCount":0},{"date":"2026-01-05","contributionCount":3}]},
-        {"contributionDays":[{"date":"2026-01-11","contributionCount":12}]}
-        ]}}}}}
-        """
+            {"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"weeks":[
+            {"contributionDays":[{"date":"2026-01-04","contributionCount":0},{"date":"2026-01-05","contributionCount":3}]},
+            {"contributionDays":[{"date":"2026-01-11","contributionCount":12}]}
+            ]}}}}}
+            """
         let graph = GitHubService.parseContributionCalendar(Data(json.utf8))
         XCTAssertNotNil(graph)
         XCTAssertEqual(graph?.weeks.count, 2)
         XCTAssertEqual(graph?.weeks[0].count, 2)
         XCTAssertEqual(graph?.weeks[0][1].count, 3)
-        XCTAssertEqual(graph?.weeks[0][1].level, 2)   // 3 → level 2
-        XCTAssertEqual(graph?.weeks[1][0].level, 4)   // 12 → level 4
+        XCTAssertEqual(graph?.weeks[0][1].level, 2)  // 3 → level 2
+        XCTAssertEqual(graph?.weeks[1][0].level, 4)  // 12 → level 4
         XCTAssertEqual(graph?.totalContributions, 15)
     }
 
@@ -662,7 +737,9 @@ final class ContributionGraphTests: XCTestCase {
     }
 
     private func day(_ count: Int) -> ContributionDay {
-        ContributionDay(date: Date(timeIntervalSince1970: 0), count: count, level: ContributionGraph.level(forCount: count))
+        ContributionDay(
+            date: Date(timeIntervalSince1970: 0), count: count,
+            level: ContributionGraph.level(forCount: count))
     }
 }
 
@@ -675,7 +752,10 @@ final class GitServiceArgumentTests: XCTestCase {
     }
 
     func testPartialWriteErrorMentionsBothKeys() {
-        let desc = GitService.GitServiceError.partialWrite(succeeded: "user.name", failed: "user.email", message: "x").errorDescription ?? ""
+        let desc =
+            GitService.GitServiceError.partialWrite(
+                succeeded: "user.name", failed: "user.email", message: "x"
+            ).errorDescription ?? ""
         XCTAssertTrue(desc.contains("user.name"))
         XCTAssertTrue(desc.contains("user.email"))
         XCTAssertTrue(desc.contains("inconsistent"))
@@ -684,7 +764,9 @@ final class GitServiceArgumentTests: XCTestCase {
 
 final class RemoteUserTests: XCTestCase {
     func testDisplayName() {
-        let user = RemoteUser(service: .github, username: "testuser", matchedKeyCount: 1, avatarUrl: nil, displayNameFull: nil, profileUrl: nil)
+        let user = RemoteUser(
+            service: .github, username: "testuser", matchedKeyCount: 1, avatarUrl: nil,
+            displayNameFull: nil, profileUrl: nil)
         XCTAssertEqual(user.displayName, "@testuser")
     }
 
@@ -697,8 +779,12 @@ final class RemoteUserTests: XCTestCase {
 
     func testBelongsToActiveKey() {
         // matchedKeyCount is scoped to the active key: >=1 means the row should show.
-        let linked = RemoteUser(service: .github, username: "u", matchedKeyCount: 1, avatarUrl: nil, displayNameFull: nil, profileUrl: nil)
-        let unlinked = RemoteUser(service: .github, username: "u", matchedKeyCount: 0, avatarUrl: nil, displayNameFull: nil, profileUrl: nil)
+        let linked = RemoteUser(
+            service: .github, username: "u", matchedKeyCount: 1, avatarUrl: nil,
+            displayNameFull: nil, profileUrl: nil)
+        let unlinked = RemoteUser(
+            service: .github, username: "u", matchedKeyCount: 0, avatarUrl: nil,
+            displayNameFull: nil, profileUrl: nil)
         XCTAssertTrue(linked.belongsToActiveKey)
         XCTAssertFalse(unlinked.belongsToActiveKey)
     }
@@ -710,8 +796,10 @@ final class KeyNormalizationTests: XCTestCase {
         // Both must normalize to the same "<type> <blob>".
         let withComment = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123 user@example.com"
         let withoutComment = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123"
-        XCTAssertEqual(GitHubService.normalizeKey(withComment), GitHubService.normalizeKey(withoutComment))
-        XCTAssertEqual(GitHubService.normalizeKey(withComment), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123")
+        XCTAssertEqual(
+            GitHubService.normalizeKey(withComment), GitHubService.normalizeKey(withoutComment))
+        XCTAssertEqual(
+            GitHubService.normalizeKey(withComment), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123")
     }
 
     func testDifferentBlobsDoNotMatch() {
@@ -731,17 +819,20 @@ final class KeyNormalizationTests: XCTestCase {
 
 final class SSHKeygenArgumentTests: XCTestCase {
     func testEd25519Args() {
-        let args = SSHIdentityService.keygenArguments(type: .ed25519, path: "/p/k", comment: "me@host", passphrase: "")
+        let args = SSHIdentityService.keygenArguments(
+            type: .ed25519, path: "/p/k", comment: "me@host", passphrase: "")
         XCTAssertEqual(args, ["-t", "ed25519", "-f", "/p/k", "-N", "", "-C", "me@host"])
     }
 
     func testRSAAddsBitLength() {
-        let args = SSHIdentityService.keygenArguments(type: .rsa, path: "/p/k", comment: "", passphrase: "")
+        let args = SSHIdentityService.keygenArguments(
+            type: .rsa, path: "/p/k", comment: "", passphrase: "")
         XCTAssertEqual(args, ["-t", "rsa", "-b", "4096", "-f", "/p/k", "-N", ""])
     }
 
     func testEmptyCommentDropsFlag() {
-        let args = SSHIdentityService.keygenArguments(type: .ed25519, path: "/p/k", comment: "", passphrase: "x")
+        let args = SSHIdentityService.keygenArguments(
+            type: .ed25519, path: "/p/k", comment: "", passphrase: "x")
         XCTAssertFalse(args.contains("-C"))
         let idx = args.firstIndex(of: "-N")!
         XCTAssertEqual(args[idx + 1], "x")
@@ -750,13 +841,16 @@ final class SSHKeygenArgumentTests: XCTestCase {
 
 final class SSHKeyNameTests: XCTestCase {
     func testBaseUsedWhenFree() {
-        XCTAssertEqual(SSHIdentityService.nextAvailableName(base: "id_ed25519", existing: []), "id_ed25519")
+        XCTAssertEqual(
+            SSHIdentityService.nextAvailableName(base: "id_ed25519", existing: []), "id_ed25519")
     }
 
     func testSkipsWhenPrivateOrPubTaken() {
         let taken: Set<String> = ["id_ed25519", "id_ed25519_2.pub"]
         // _2 is blocked by its .pub sibling, so _3 wins.
-        XCTAssertEqual(SSHIdentityService.nextAvailableName(base: "id_ed25519", existing: taken), "id_ed25519_3")
+        XCTAssertEqual(
+            SSHIdentityService.nextAvailableName(base: "id_ed25519", existing: taken),
+            "id_ed25519_3")
     }
 
     func testValidName() {
@@ -769,23 +863,28 @@ final class SSHKeyNameTests: XCTestCase {
 
 final class RemoteAddKeyRequestTests: XCTestCase {
     func testGitHubRequest() throws {
-        let req = try XCTUnwrap(GitHubService.addKeyRequest(title: "t", publicKey: "ssh-ed25519 AAAA", pat: "tok"))
+        let req = try XCTUnwrap(
+            GitHubService.addKeyRequest(title: "t", publicKey: "ssh-ed25519 AAAA", pat: "tok"))
         XCTAssertEqual(req.url?.absoluteString, "https://api.github.com/user/keys")
         XCTAssertEqual(req.httpMethod, "POST")
         XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
-        let body = try JSONSerialization.jsonObject(with: try XCTUnwrap(req.httpBody)) as? [String: String]
+        let body =
+            try JSONSerialization.jsonObject(with: try XCTUnwrap(req.httpBody)) as? [String: String]
         XCTAssertEqual(body?["title"], "t")
         XCTAssertEqual(body?["key"], "ssh-ed25519 AAAA")
     }
 
     func testGitLabRequestUsesInstance() throws {
-        let req = try XCTUnwrap(GitLabService.addKeyRequest(title: "t", publicKey: "k", pat: "tok", instance: "git.acme.io"))
+        let req = try XCTUnwrap(
+            GitLabService.addKeyRequest(
+                title: "t", publicKey: "k", pat: "tok", instance: "git.acme.io"))
         XCTAssertEqual(req.url?.absoluteString, "https://git.acme.io/api/v4/user/keys")
         XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
     }
 
     func testGitLabDefaultsToGitlabDotCom() throws {
-        let req = try XCTUnwrap(GitLabService.addKeyRequest(title: "t", publicKey: "k", pat: "tok", instance: ""))
+        let req = try XCTUnwrap(
+            GitLabService.addKeyRequest(title: "t", publicKey: "k", pat: "tok", instance: ""))
         XCTAssertEqual(req.url?.absoluteString, "https://gitlab.com/api/v4/user/keys")
     }
 

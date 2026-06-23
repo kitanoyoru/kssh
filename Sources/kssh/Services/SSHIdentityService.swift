@@ -3,7 +3,9 @@ import Foundation
 /// Discovers SSH keypairs under `~/.ssh` and switches the active identity by
 /// rewriting `~/.ssh/config` (persistent) and reloading the ssh-agent (live).
 struct SSHIdentityService {
-    private static var sshDir: String { (NSHomeDirectory() as NSString).appendingPathComponent(".ssh") }
+    private static var sshDir: String {
+        (NSHomeDirectory() as NSString).appendingPathComponent(".ssh")
+    }
     private static var configPath: String { (sshDir as NSString).appendingPathComponent("config") }
 
     // MARK: - Discovery
@@ -23,33 +25,40 @@ struct SSHIdentityService {
             // Skip public keys and non-key artifacts; everything else is a private
             // key candidate that ssh-keygen will validate (non-keys are rejected).
             guard !entry.hasSuffix(".pub"),
-                  entry != "config",
-                  !entry.hasPrefix("known_hosts"),
-                  entry != "authorized_keys",
-                  !entry.hasPrefix(".") else { continue }
+                entry != "config",
+                !entry.hasPrefix("known_hosts"),
+                entry != "authorized_keys",
+                !entry.hasPrefix(".")
+            else { continue }
 
             let priv = (sshDir as NSString).appendingPathComponent(entry)
             let pub = pubs.contains("\(entry).pub") ? "\(priv).pub" : ""
 
             // Read identity info from the .pub if present (no passphrase prompt),
             // otherwise fall back to the private key file itself.
-            guard let info = await fingerprintInfo(forKeyFile: pub.isEmpty ? priv : pub) else { continue }
-            identities.append(SSHIdentity(
-                privateKeyPath: priv,
-                publicKeyPath: pub,
-                keyType: info.keyType,
-                comment: info.comment,
-                fingerprint: info.fingerprint
-            ))
+            guard let info = await fingerprintInfo(forKeyFile: pub.isEmpty ? priv : pub) else {
+                continue
+            }
+            identities.append(
+                SSHIdentity(
+                    privateKeyPath: priv,
+                    publicKeyPath: pub,
+                    keyType: info.keyType,
+                    comment: info.comment,
+                    fingerprint: info.fingerprint
+                ))
         }
         return identities
     }
 
     /// Parses `ssh-keygen -lf <file>` → "<bits> SHA256:<fp> <comment> (<TYPE>)".
     /// Works for both public and unencrypted private key files.
-    private static func fingerprintInfo(forKeyFile file: String) async -> (keyType: String, comment: String, fingerprint: String)? {
+    private static func fingerprintInfo(
+        forKeyFile file: String
+    ) async -> (keyType: String, comment: String, fingerprint: String)? {
         guard let result = await ProcessRunner.run("ssh-keygen", arguments: ["-lf", file]),
-              result.exitCode == 0 else { return nil }
+            result.exitCode == 0
+        else { return nil }
 
         let line = result.output
         let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
@@ -76,7 +85,9 @@ struct SSHIdentityService {
 
     /// The identity currently active in `~/.ssh/config`, matched against `identities`.
     static func activeIdentity(among identities: [SSHIdentity]) -> SSHIdentity? {
-        guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else { return nil }
+        guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+            return nil
+        }
         return activeIdentity(among: identities, in: contents)
     }
 
@@ -86,7 +97,9 @@ struct SSHIdentityService {
     /// resolution can only ever report the first specific block's key. Persisting the
     /// last switched-to key (`selectedPath`) lets the UI reflect the user's choice.
     /// A stale selection (key no longer on disk) falls back to config resolution.
-    static func activeIdentity(among identities: [SSHIdentity], selectedPath: String?) -> SSHIdentity? {
+    static func activeIdentity(
+        among identities: [SSHIdentity], selectedPath: String?
+    ) -> SSHIdentity? {
         guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else {
             return selectedPath.flatMap { sel in identities.first { $0.privateKeyPath == sel } }
         }
@@ -94,8 +107,12 @@ struct SSHIdentityService {
     }
 
     /// Pure, testable overload of the selection-aware resolver.
-    static func activeIdentity(among identities: [SSHIdentity], selectedPath: String?, in config: String) -> SSHIdentity? {
-        if let selectedPath, let selected = identities.first(where: { $0.privateKeyPath == selectedPath }) {
+    static func activeIdentity(
+        among identities: [SSHIdentity], selectedPath: String?, in config: String
+    ) -> SSHIdentity? {
+        if let selectedPath,
+            let selected = identities.first(where: { $0.privateKeyPath == selectedPath })
+        {
             return selected
         }
         return activeIdentity(among: identities, in: config)
@@ -113,7 +130,8 @@ struct SSHIdentityService {
         func match(at i: Int) -> SSHIdentity? {
             let stripped = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
             guard !stripped.hasPrefix("#"),
-                  let path = identityFilePath(in: stripped) else { return nil }
+                let path = identityFilePath(in: stripped)
+            else { return nil }
             let expanded = expand(path)
             return identities.first { $0.privateKeyPath == expanded }
         }
@@ -132,7 +150,7 @@ struct SSHIdentityService {
                 if isWildcard {
                     if wildcardMatch == nil { wildcardMatch = m }
                 } else {
-                    return m   // specific host block wins immediately
+                    return m  // specific host block wins immediately
                 }
             }
         }
@@ -212,19 +230,22 @@ struct SSHIdentityService {
         let nonInteractive = [
             "SSH_ASKPASS_REQUIRE": "never",
             "SSH_ASKPASS": "/usr/bin/false",
-            "DISPLAY": ""
+            "DISPLAY": "",
         ]
-        guard let add = await ProcessRunner.run(
-            "ssh-add",
-            arguments: [identity.privateKeyPath],
-            timeout: 10,
-            environment: nonInteractive
-        ) else {
+        guard
+            let add = await ProcessRunner.run(
+                "ssh-add",
+                arguments: [identity.privateKeyPath],
+                timeout: 10,
+                environment: nonInteractive
+            )
+        else {
             throw ActivationError.agentLoadFailed("ssh-add did not run")
         }
         if add.exitCode != 0 {
             throw ActivationError.agentLoadFailed(
-                add.output.isEmpty ? "exit \(add.exitCode) (key may be passphrase-protected)" : add.output
+                add.output.isEmpty
+                    ? "exit \(add.exitCode) (key may be passphrase-protected)" : add.output
             )
         }
     }
@@ -233,11 +254,13 @@ struct SSHIdentityService {
     /// touching `~/.ssh/config`. Note: `ssh-add -d` exits non-zero when the key is not
     /// currently loaded ("agent refused operation") — callers should treat that as benign.
     static func unloadFromAgent(_ identity: SSHIdentity) async throws {
-        guard let del = await ProcessRunner.run(
-            "ssh-add",
-            arguments: unloadArguments(for: identity),
-            timeout: 10
-        ) else {
+        guard
+            let del = await ProcessRunner.run(
+                "ssh-add",
+                arguments: unloadArguments(for: identity),
+                timeout: 10
+            )
+        else {
             throw ActivationError.agentUnloadFailed("ssh-add did not run")
         }
         if del.exitCode != 0 {
@@ -273,9 +296,12 @@ struct SSHIdentityService {
             switch self {
             case .keyExists(let name): return "A key named \(name) already exists in ~/.ssh"
             case .keygenFailed(let msg): return "ssh-keygen failed: \(msg)"
-            case .keyInUse: return "This key is referenced in ~/.ssh/config. Switch to another key or edit the config first."
+            case .keyInUse:
+                return
+                    "This key is referenced in ~/.ssh/config. Switch to another key or edit the config first."
             case .nameTaken(let name): return "A file named \(name) already exists in ~/.ssh"
-            case .invalidName: return "Name must be a single file name with no “/” and no “.pub” suffix."
+            case .invalidName:
+                return "Name must be a single file name with no “/” and no “.pub” suffix."
             case .moveFailed(let msg): return "Could not move key file: \(msg)"
             }
         }
@@ -284,7 +310,9 @@ struct SSHIdentityService {
     /// Pure, testable builder for the `ssh-keygen` argument vector. An empty `comment`
     /// drops `-C`; an empty `passphrase` produces `-N ""` (unencrypted, non-interactive).
     /// rsa keys are 4096-bit.
-    static func keygenArguments(type: KeyType, path: String, comment: String, passphrase: String) -> [String] {
+    static func keygenArguments(
+        type: KeyType, path: String, comment: String, passphrase: String
+    ) -> [String] {
         var args = ["-t", type.rawValue]
         if type == .rsa { args += ["-b", "4096"] }
         args += ["-f", path, "-N", passphrase]
@@ -307,7 +335,9 @@ struct SSHIdentityService {
 
     /// Generates a new keypair in `~/.ssh` (create-only: it is NOT added to the agent and
     /// NOT written to `~/.ssh/config`). Returns the freshly discovered `SSHIdentity`.
-    static func generateKey(type: KeyType, comment: String, passphrase: String) async throws -> SSHIdentity {
+    static func generateKey(
+        type: KeyType, comment: String, passphrase: String
+    ) async throws -> SSHIdentity {
         let fm = FileManager.default
         let existing = Set((try? fm.contentsOfDirectory(atPath: sshDir)) ?? [])
         let name = nextAvailableName(base: "id_\(type.rawValue)", existing: existing)
@@ -315,11 +345,13 @@ struct SSHIdentityService {
 
         // rsa-4096 needs time; ed25519 is instant. A generous timeout covers both.
         let args = keygenArguments(type: type, path: path, comment: comment, passphrase: passphrase)
-        guard let result = await ProcessRunner.run("ssh-keygen", arguments: args, timeout: 120) else {
+        guard let result = await ProcessRunner.run("ssh-keygen", arguments: args, timeout: 120)
+        else {
             throw KeyError.keygenFailed("ssh-keygen did not run")
         }
         guard result.exitCode == 0 else {
-            throw KeyError.keygenFailed(result.output.isEmpty ? "exit \(result.exitCode)" : result.output)
+            throw KeyError.keygenFailed(
+                result.output.isEmpty ? "exit \(result.exitCode)" : result.output)
         }
 
         // ssh-keygen already sets these, but set them explicitly for safety (mirrors the
@@ -346,8 +378,9 @@ struct SSHIdentityService {
             .appendingPathComponent(".kssh-trash")
         let dest = (trashDir as NSString).appendingPathComponent(trashSuffix)
         do {
-            try fm.createDirectory(atPath: dest, withIntermediateDirectories: true,
-                                   attributes: [.posixPermissions: 0o700])
+            try fm.createDirectory(
+                atPath: dest, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
         } catch {
             throw KeyError.moveFailed(error.localizedDescription)
         }
@@ -355,8 +388,9 @@ struct SSHIdentityService {
         func move(_ src: String) throws {
             guard fm.fileExists(atPath: src) else { return }
             let to = (dest as NSString).appendingPathComponent((src as NSString).lastPathComponent)
-            do { try fm.moveItem(atPath: src, toPath: to) }
-            catch { throw KeyError.moveFailed(error.localizedDescription) }
+            do { try fm.moveItem(atPath: src, toPath: to) } catch {
+                throw KeyError.moveFailed(error.localizedDescription)
+            }
         }
         try move(identity.privateKeyPath)
         if !identity.publicKeyPath.isEmpty { try move(identity.publicKeyPath) }
@@ -418,7 +452,7 @@ struct SSHIdentityService {
         }
 
         let rewritten = transform(config: original, activating: identity)
-        guard rewritten != original else { return } // no-op, nothing to write
+        guard rewritten != original else { return }  // no-op, nothing to write
 
         // Back up before mutating, preserving the original permissions on the new file.
         if fm.fileExists(atPath: configPath) {
@@ -488,9 +522,9 @@ struct SSHIdentityService {
                 let indent = leadingWhitespace(of: lines[i])
 
                 if expand(path) == target {
-                    lines[i] = "\(indent)IdentityFile \(path)"          // activate
+                    lines[i] = "\(indent)IdentityFile \(path)"  // activate
                 } else if !stripped.hasPrefix("#") {
-                    lines[i] = "\(indent)#IdentityFile \(path)"         // deactivate competitor
+                    lines[i] = "\(indent)#IdentityFile \(path)"  // deactivate competitor
                 }
             }
         }
@@ -506,7 +540,8 @@ struct SSHIdentityService {
         for (i, raw) in lines.enumerated() {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if line.hasPrefix("host ") || line == "host"
-                || line.hasPrefix("match ") || line == "match" {
+                || line.hasPrefix("match ") || line == "match"
+            {
                 starts.append(i)
             }
         }
@@ -538,11 +573,13 @@ struct SSHIdentityService {
     private static func reloadAgent(with identity: SSHIdentity) async throws {
         // Clear all loaded identities, then add the chosen one.
         _ = await ProcessRunner.run("ssh-add", arguments: ["-D"])
-        guard let add = await ProcessRunner.run("ssh-add", arguments: [identity.privateKeyPath]) else {
+        guard let add = await ProcessRunner.run("ssh-add", arguments: [identity.privateKeyPath])
+        else {
             throw ActivationError.agentReloadFailed("ssh-add did not run")
         }
         if add.exitCode != 0 {
-            throw ActivationError.agentReloadFailed(add.output.isEmpty ? "exit \(add.exitCode)" : add.output)
+            throw ActivationError.agentReloadFailed(
+                add.output.isEmpty ? "exit \(add.exitCode)" : add.output)
         }
     }
 

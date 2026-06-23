@@ -7,19 +7,19 @@ import SwiftUI
 private enum Route: Equatable {
     case main
     case profilesList
-    case profileForm(editing: GitProfile?)   // nil = add
+    case profileForm(editing: GitProfile?)  // nil = add
     case createGPGKey
     case createSSHKey
     case renameKey(identity: SSHIdentity)
     case remoteDetail(user: RemoteUser, service: RemoteService, account: RemoteAccount)
-    case addAccount(service: RemoteService?)   // nil = pick service on the screen
+    case addAccount(service: RemoteService?)  // nil = pick service on the screen
     case editAccount(service: RemoteService, account: RemoteAccount)
 
     /// Where the back button returns to.
     var parent: Route {
         switch self {
         case .main, .profilesList, .createGPGKey, .createSSHKey, .renameKey, .remoteDetail,
-             .addAccount, .editAccount:
+            .addAccount, .editAccount:
             return .main
         case .profileForm: return .profilesList
         }
@@ -34,7 +34,8 @@ private enum Route: Equatable {
         case .createSSHKey: return "Generate SSH Key"
         case .renameKey: return "Rename Key"
         case .remoteDetail(let user, _, _): return user.service.rawValue
-        case .addAccount(let service): return service.map { "Add \($0.rawValue) Account" } ?? "Add Account"
+        case .addAccount(let service):
+            return service.map { "Add \($0.rawValue) Account" } ?? "Add Account"
         case .editAccount: return "Edit Account"
         }
     }
@@ -52,9 +53,9 @@ extension RemoteService {
     /// The provider's brand color, used as the lettermark badge fill.
     var brandColor: Color {
         switch self {
-        case .github: return Color(red: 0.14, green: 0.16, blue: 0.18)   // GitHub near-black
-        case .gitlab: return Color(red: 0.89, green: 0.36, blue: 0.16)   // GitLab orange
-        case .bitbucket: return Color(red: 0.16, green: 0.40, blue: 0.86) // Bitbucket blue
+        case .github: return Color(red: 0.14, green: 0.16, blue: 0.18)  // GitHub near-black
+        case .gitlab: return Color(red: 0.89, green: 0.36, blue: 0.16)  // GitLab orange
+        case .bitbucket: return Color(red: 0.16, green: 0.40, blue: 0.86)  // Bitbucket blue
         }
     }
 
@@ -136,7 +137,8 @@ struct MenuBarView: View {
                 .transition(.move(edge: .trailing))
             case .remoteDetail(let user, let service, let account):
                 routeScreen {
-                    RemoteDetailScreen(viewModel: viewModel, user: user, service: service, account: account)
+                    RemoteDetailScreen(
+                        viewModel: viewModel, user: user, service: service, account: account)
                 }
                 .transition(.move(edge: .trailing))
             case .addAccount(let service):
@@ -161,7 +163,7 @@ struct MenuBarView: View {
         .onAppear { viewModel.startAutoRefresh() }
         .onDisappear {
             viewModel.stopAutoRefresh()
-            route = .main   // ephemeral popover: fresh open, discard unsaved form text
+            route = .main  // ephemeral popover: fresh open, discard unsaved form text
         }
     }
 
@@ -254,12 +256,16 @@ struct MenuBarView: View {
                                 .truncationMode(.middle)
                         }
                         Spacer(minLength: Spacing.xs)
-                        Button { withAnimation { route = .profileForm(editing: profile) } } label: {
+                        Button {
+                            withAnimation { route = .profileForm(editing: profile) }
+                        } label: {
                             Image(systemName: "pencil").font(.system(size: 12))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Edit profile")
-                        Button(role: .destructive) { store.deleteProfile(profile) } label: {
+                        Button(role: .destructive) {
+                            store.deleteProfile(profile)
+                        } label: {
                             Image(systemName: "trash")
                                 .font(.system(size: 12))
                                 .foregroundStyle(StatusColor.destructive)
@@ -277,7 +283,9 @@ struct MenuBarView: View {
                 }
             }
             if store.canAddProfile {
-                Button { withAnimation { route = .profileForm(editing: nil) } } label: {
+                Button {
+                    withAnimation { route = .profileForm(editing: nil) }
+                } label: {
                     actionLabelRow("Add profile", systemImage: "plus.circle")
                 }
                 .buttonStyle(MenuActionButtonStyle())
@@ -354,7 +362,9 @@ struct MenuBarView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button { Task { await viewModel.startAgent() } } label: {
+            Button {
+                Task { await viewModel.startAgent() }
+            } label: {
                 if viewModel.startingAgent {
                     HStack(spacing: Spacing.xs) {
                         ProgressView().controlSize(.small)
@@ -387,7 +397,8 @@ struct MenuBarView: View {
             }
         ) {
             if viewModel.availableIdentities.isEmpty {
-                EmptyRow(text: viewModel.agentRunning ? "No keys found in ~/.ssh" : "Agent not running")
+                EmptyRow(
+                    text: viewModel.agentRunning ? "No keys found in ~/.ssh" : "Agent not running")
             } else {
                 ForEach(viewModel.availableIdentities) { identity in
                     IdentitySwitchRow(
@@ -412,8 +423,9 @@ struct MenuBarView: View {
                         badge: "AGENT",
                         detail: key.shortFingerprint
                     )
-                    .copyable(key.publicKey.isEmpty ? key.fingerprint : key.publicKey,
-                              label: key.publicKey.isEmpty ? "Copy fingerprint" : "Copy public key")
+                    .copyable(
+                        key.publicKey.isEmpty ? key.fingerprint : key.publicKey,
+                        label: key.publicKey.isEmpty ? "Copy fingerprint" : "Copy public key")
                 }
             }
             generateKeyButton
@@ -434,7 +446,9 @@ struct MenuBarView: View {
             }
             Button("Cancel", role: .cancel) { keyPendingDelete = nil }
         } message: {
-            Text("The key files move to ~/.ssh/.kssh-trash (recoverable). It is also unloaded from the agent.")
+            Text(
+                "The key files move to ~/.ssh/.kssh-trash (recoverable). It is also unloaded from the agent."
+            )
         }
     }
 
@@ -459,7 +473,9 @@ struct MenuBarView: View {
     /// `keysSection` body stays readable.
     @ViewBuilder
     private func keyContextMenu(for identity: SSHIdentity) -> some View {
-        Button { Clipboard.copy(identity.fingerprint) } label: {
+        Button {
+            Clipboard.copy(identity.fingerprint)
+        } label: {
             Label("Copy fingerprint", systemImage: "doc.on.doc")
         }
         if !identity.publicKeyPath.isEmpty {
@@ -479,12 +495,16 @@ struct MenuBarView: View {
                 if viewModel.token(for: .github)?.isEmpty == false {
                     Button {
                         Task { await viewModel.addActiveKeyToRemote(.github) }
-                    } label: { Label("GitHub", systemImage: "arrow.up.circle") }
+                    } label: {
+                        Label("GitHub", systemImage: "arrow.up.circle")
+                    }
                 }
                 if viewModel.token(for: .gitlab)?.isEmpty == false {
                     Button {
                         Task { await viewModel.addActiveKeyToRemote(.gitlab) }
-                    } label: { Label("GitLab", systemImage: "arrow.up.circle") }
+                    } label: {
+                        Label("GitLab", systemImage: "arrow.up.circle")
+                    }
                 }
             }
             .disabled(viewModel.addingKeyToRemote != nil)
@@ -492,11 +512,15 @@ struct MenuBarView: View {
 
         Divider()
 
-        Button { withAnimation { route = .renameKey(identity: identity) } } label: {
+        Button {
+            withAnimation { route = .renameKey(identity: identity) }
+        } label: {
             Label("Rename…", systemImage: "pencil")
         }
         .disabled(viewModel.mutatingKey != nil)
-        Button(role: .destructive) { keyPendingDelete = identity } label: {
+        Button(role: .destructive) {
+            keyPendingDelete = identity
+        } label: {
             Label("Delete…", systemImage: "trash")
         }
         .disabled(viewModel.mutatingKey != nil)
@@ -659,8 +683,15 @@ struct MenuBarView: View {
                     disabled: viewModel.switchingAccount != nil || viewModel.mutatingAccount != nil,
                     testResult: viewModel.accountTestResult[ref.account.id],
                     user: viewModel.accountUser(ref.account),
-                    onSwitch: { Task { await viewModel.switchAccount(ref.account, for: ref.service) } },
-                    onOpen: { user in withAnimation { route = .remoteDetail(user: user, service: ref.service, account: ref.account) } }
+                    onSwitch: {
+                        Task { await viewModel.switchAccount(ref.account, for: ref.service) }
+                    },
+                    onOpen: { user in
+                        withAnimation {
+                            route = .remoteDetail(
+                                user: user, service: ref.service, account: ref.account)
+                        }
+                    }
                 )
                 .contextMenu { accountContextMenu(ref.account, service: ref.service) }
             }
@@ -707,22 +738,30 @@ struct MenuBarView: View {
     /// Per-account context menu: test, edit, set-active, delete.
     @ViewBuilder
     private func accountContextMenu(_ account: RemoteAccount, service: RemoteService) -> some View {
-        Button { Task { await viewModel.testAccount(account, for: service) } } label: {
+        Button {
+            Task { await viewModel.testAccount(account, for: service) }
+        } label: {
             Label("Test connection", systemImage: "checkmark.shield")
         }
         .disabled(viewModel.testingAccount != nil)
-        Button { withAnimation { route = .editAccount(service: service, account: account) } } label: {
+        Button {
+            withAnimation { route = .editAccount(service: service, account: account) }
+        } label: {
             Label("Edit…", systemImage: "pencil")
         }
         .disabled(viewModel.mutatingAccount != nil)
         if !viewModel.isActiveAccount(account, for: service) {
-            Button { Task { await viewModel.switchAccount(account, for: service) } } label: {
+            Button {
+                Task { await viewModel.switchAccount(account, for: service) }
+            } label: {
                 Label("Set active", systemImage: "largecircle.fill.circle")
             }
             .disabled(viewModel.switchingAccount != nil)
         }
         Divider()
-        Button(role: .destructive) { accountPendingDelete = AccountRef(service: service, account: account) } label: {
+        Button(role: .destructive) {
+            accountPendingDelete = AccountRef(service: service, account: account)
+        } label: {
             Label("Remove…", systemImage: "trash")
         }
         .disabled(viewModel.mutatingAccount != nil)
@@ -774,7 +813,8 @@ struct MenuBarView: View {
         }
     }
 
-    private func actionLabel(_ title: String, systemImage: String, spin: Bool = false) -> some View {
+    private func actionLabel(_ title: String, systemImage: String, spin: Bool = false) -> some View
+    {
         HStack(spacing: Spacing.sm + 2) {
             SpinningIcon(systemImage: systemImage, spinning: spin)
             Text(title)
@@ -871,7 +911,9 @@ private struct ProfileFormScreen: View {
                 }
                 onDone()
             } label: {
-                primaryActionLabel(editing == nil ? "Add profile" : "Save changes", systemImage: "checkmark.circle")
+                primaryActionLabel(
+                    editing == nil ? "Add profile" : "Save changes", systemImage: "checkmark.circle"
+                )
             }
             .buttonStyle(PrimaryActionButtonStyle())
             .disabled(!canSave)
@@ -927,7 +969,8 @@ private struct CreateGPGScreen: View {
                 }
                 Button {
                     Task {
-                        let ok = await viewModel.createGPGKey(name: name, email: email, passphrase: passphrase)
+                        let ok = await viewModel.createGPGKey(
+                            name: name, email: email, passphrase: passphrase)
                         if ok { onDone() }
                     }
                 } label: {
@@ -988,7 +1031,8 @@ private struct CreateSSHKeyScreen: View {
                 }
                 Button {
                     Task {
-                        let ok = await viewModel.generateSSHKey(type: keyType, comment: comment, passphrase: passphrase)
+                        let ok = await viewModel.generateSSHKey(
+                            type: keyType, comment: comment, passphrase: passphrase)
                         if ok { onDone() }
                     }
                 } label: {
@@ -1118,10 +1162,12 @@ private struct AddAccountScreen: View {
                     Task {
                         let ok: Bool
                         if service == .bitbucket {
-                            ok = await viewModel.addBitbucketAccount(label: label, username: username, appPassword: secret)
+                            ok = await viewModel.addBitbucketAccount(
+                                label: label, username: username, appPassword: secret)
                         } else {
-                            ok = await viewModel.addAccount(label: label, secret: secret,
-                                                            instance: service == .gitlab ? instance : nil, for: service)
+                            ok = await viewModel.addAccount(
+                                label: label, secret: secret,
+                                instance: service == .gitlab ? instance : nil, for: service)
                         }
                         if ok { onDone() }
                     }
@@ -1136,7 +1182,9 @@ private struct AddAccountScreen: View {
 
     private var scopesHint: String {
         switch service {
-        case .github: return "github.com/settings/tokens — read:public_key, read:user (and read:user for the graph)."
+        case .github:
+            return
+                "github.com/settings/tokens — read:public_key, read:user (and read:user for the graph)."
         case .gitlab: return "\(instance)/-/user_settings/personal_access_tokens — read_api."
         case .bitbucket: return "bitbucket.org App Password — Account: Read, SSH keys: Read."
         }
@@ -1260,7 +1308,8 @@ private struct RemoteDetailScreen: View {
                     ContributionGraphView(graph: graph)
                 }
 
-                let hasFields = (detail.company?.isEmpty == false)
+                let hasFields =
+                    (detail.company?.isEmpty == false)
                     || (detail.location?.isEmpty == false)
                 if hasFields {
                     VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -1284,8 +1333,11 @@ private struct RemoteDetailScreen: View {
             Spacer(minLength: 0)
 
             if let url = user.profileUrl {
-                Button { NSWorkspace.shared.open(url) } label: {
-                    primaryActionLabel("Open on \(service.rawValue)", systemImage: "arrow.up.right.square")
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    primaryActionLabel(
+                        "Open on \(service.rawValue)", systemImage: "arrow.up.right.square")
                 }
                 .buttonStyle(PrimaryActionButtonStyle())
             }
@@ -1340,7 +1392,7 @@ private struct RemoteDetailScreen: View {
         let items: [(String, Int)] = [
             ("Repos", d.publicRepos),
             ("Followers", d.followers),
-            ("Following", d.following)
+            ("Following", d.following),
         ].compactMap { label, value in value.map { (label, $0) } }
 
         if !items.isEmpty {
@@ -1409,7 +1461,9 @@ private struct ContributionGraphView: View {
                                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                                     .fill(color(for: day.level))
                                     .frame(width: cell, height: cell)
-                                    .help("\(day.count) on \(Self.dayFormatter.string(from: day.date))")
+                                    .help(
+                                        "\(day.count) on \(Self.dayFormatter.string(from: day.date))"
+                                    )
                             }
                         }
                     }
@@ -1523,7 +1577,9 @@ private struct SectionCard<Content: View, Accessory: View>: View {
         if collapsible {
             Button {
                 withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
-            } label: { header }
+            } label: {
+                header
+            }
             .buttonStyle(.plain)
             .accessibilityLabel("\(title) section, \(isExpanded ? "expanded" : "collapsed")")
         } else {
@@ -2049,7 +2105,9 @@ private struct ProfileTab: View {
         .buttonStyle(.plain)
         .disabled(disabled || isActive)
         .background(Capsule().fill(fill))
-        .overlay(Capsule().strokeBorder(StatusColor.active.opacity(isActive ? 0.4 : 0), lineWidth: 1))
+        .overlay(
+            Capsule().strokeBorder(StatusColor.active.opacity(isActive ? 0.4 : 0), lineWidth: 1)
+        )
         .help(profile.email)
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
@@ -2089,7 +2147,9 @@ private struct FlowLayout: Layout {
         return CGSize(width: min(totalWidth, maxWidth), height: totalHeight)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(
+        in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+    ) {
         var x = bounds.minX
         var y = bounds.minY
         var rowHeight: CGFloat = 0

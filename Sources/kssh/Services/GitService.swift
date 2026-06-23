@@ -23,7 +23,8 @@ struct GitService {
     }
 
     private static func getConfig(_ key: String) async -> String? {
-        let result = await ProcessRunner.run("git", arguments: ["config", "--global", "--get", key])
+        let result = await ProcessRunner.run(
+            "git", arguments: ["config", "--global", "--get", key])
         guard let output = result, output.exitCode == 0, !output.output.isEmpty else {
             return nil
         }
@@ -44,7 +45,8 @@ struct GitService {
             case .writeFailed(let key, let message):
                 return "Failed to set \(key): \(message)"
             case .partialWrite(let succeeded, let failed, let message):
-                return "Partially applied profile: \(succeeded) was set but \(failed) failed (\(message)). Git config may be inconsistent."
+                return
+                    "Partially applied profile: \(succeeded) was set but \(failed) failed (\(message)). Git config may be inconsistent."
             }
         }
     }
@@ -63,12 +65,15 @@ struct GitService {
             throw GitServiceError.gitUnavailable
         }
 
-        let nameResult = await ProcessRunner.run("git", arguments: configArguments(key: "user.name", value: name))
+        let nameResult = await ProcessRunner.run(
+            "git", arguments: configArguments(key: "user.name", value: name))
         guard let nameResult, nameResult.exitCode == 0 else {
-            throw GitServiceError.writeFailed(key: "user.name", message: nameResult?.output ?? "git did not run")
+            throw GitServiceError.writeFailed(
+                key: "user.name", message: nameResult?.output ?? "git did not run")
         }
 
-        let emailResult = await ProcessRunner.run("git", arguments: configArguments(key: "user.email", value: email))
+        let emailResult = await ProcessRunner.run(
+            "git", arguments: configArguments(key: "user.email", value: email))
         guard let emailResult, emailResult.exitCode == 0 else {
             throw GitServiceError.partialWrite(
                 succeeded: "user.name",

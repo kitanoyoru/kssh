@@ -8,9 +8,9 @@ struct SSHService {
         let publicKeyResult = await ProcessRunner.run("ssh-add", arguments: ["-L"])
 
         guard let fpOutput = fingerprintResult,
-              let pkOutput = publicKeyResult,
-              fpOutput.exitCode == 0,
-              pkOutput.exitCode == 0
+            let pkOutput = publicKeyResult,
+            fpOutput.exitCode == 0,
+            pkOutput.exitCode == 0
         else {
             return keys
         }
@@ -23,20 +23,24 @@ struct SSHService {
             let parts = fpLine.split(separator: " ", maxSplits: 2)
             guard parts.count >= 2 else { continue }
 
-            let keyType = fpLine.contains("(") ?
-                String(fpLine.split(separator: "(").last?.dropLast() ?? "") : ""
+            let keyType =
+                fpLine.contains("(")
+                ? String(fpLine.split(separator: "(").last?.dropLast() ?? "") : ""
 
             let fingerprint = String(parts[1])
-            let comment = parts.count >= 3 ? String(parts[2]).replacingOccurrences(of: " (\(keyType))", with: "") : ""
+            let comment =
+                parts.count >= 3
+                ? String(parts[2]).replacingOccurrences(of: " (\(keyType))", with: "") : ""
 
             let publicKey = index < pkLines.count ? pkLines[index] : ""
 
-            keys.append(SSHKey(
-                keyType: keyType.isEmpty ? String(parts[0]) : keyType,
-                fingerprint: fingerprint,
-                comment: comment,
-                publicKey: publicKey
-            ))
+            keys.append(
+                SSHKey(
+                    keyType: keyType.isEmpty ? String(parts[0]) : keyType,
+                    fingerprint: fingerprint,
+                    comment: comment,
+                    publicKey: publicKey
+                ))
         }
 
         return keys
@@ -65,8 +69,9 @@ struct SSHService {
     @discardableResult
     static func startAgent() async -> Bool {
         guard let result = await ProcessRunner.run("ssh-agent", arguments: ["-s"]),
-              result.exitCode == 0,
-              let socket = parseAgentSocket(from: result.output) else {
+            result.exitCode == 0,
+            let socket = parseAgentSocket(from: result.output)
+        else {
             return false
         }
         ProcessRunner.useAgentSocket(socket)

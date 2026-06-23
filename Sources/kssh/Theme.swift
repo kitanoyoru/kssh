@@ -141,7 +141,8 @@ struct MenuActionButtonStyle: ButtonStyle {
                 .padding(.vertical, Spacing.sm - 1)
                 .background(
                     RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                        .fill(tint.opacity(configuration.isPressed ? 0.16 : (isHovering ? 0.08 : 0)))
+                        .fill(
+                            tint.opacity(configuration.isPressed ? 0.16 : (isHovering ? 0.08 : 0)))
                 )
                 .contentShape(Rectangle())
                 .onHover { hovering in

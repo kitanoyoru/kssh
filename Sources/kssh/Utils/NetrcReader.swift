@@ -38,7 +38,8 @@ enum NetrcReader {
             case "password":
                 index += 1
                 if index < tokens.count,
-                   currentMachine == machine || currentMachine == "default" {
+                    currentMachine == machine || currentMachine == "default"
+                {
                     return tokens[index]
                 }
             default:

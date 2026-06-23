@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 enum Clipboard {
     /// Writes a plain-text string to the general pasteboard. No-op on empty.

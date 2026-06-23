@@ -79,7 +79,9 @@ struct SettingsView: View {
                                         .foregroundColor(.secondary)
                                 }
                                 Spacer()
-                                if service == .gitlab, let instance = account.instance, !instance.isEmpty {
+                                if service == .gitlab, let instance = account.instance,
+                                    !instance.isEmpty
+                                {
                                     Text(instance)
                                         .font(.caption)
                                         .foregroundColor(.secondary)
@@ -93,9 +95,11 @@ struct SettingsView: View {
             }
 
             Section {
-                Text("Add, edit, switch, test, or remove accounts from the menu bar — click the kssh key icon, then the Remote section.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text(
+                    "Add, edit, switch, test, or remove accounts from the menu bar — click the kssh key icon, then the Remote section."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)

@@ -81,15 +81,18 @@ enum ProcessRunner {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(atPath: base) else { return nil }
 
-        let candidates = entries
+        let candidates =
+            entries
             .filter { $0.hasPrefix("com.apple.launchd.") }
             .map { "\(base)/\($0)/Listeners" }
             .filter { fm.fileExists(atPath: $0) }
 
         // Prefer the newest socket if several launchd dirs linger after re-logins.
         return candidates.max { lhs, rhs in
-            let lDate = (try? fm.attributesOfItem(atPath: lhs)[.creationDate]) as? Date ?? .distantPast
-            let rDate = (try? fm.attributesOfItem(atPath: rhs)[.creationDate]) as? Date ?? .distantPast
+            let lDate =
+                (try? fm.attributesOfItem(atPath: lhs)[.creationDate]) as? Date ?? .distantPast
+            let rDate =
+                (try? fm.attributesOfItem(atPath: rhs)[.creationDate]) as? Date ?? .distantPast
             return lDate < rDate
         }
     }
@@ -97,7 +100,10 @@ enum ProcessRunner {
     /// Runs `command` with `arguments`. `environment` is an optional per-call overlay
     /// merged over the resolved base environment — used to pass non-interactive flags
     /// (e.g. SSH_ASKPASS_REQUIRE) or longer-lived settings without mutating the shared base.
-    static func run(_ command: String, arguments: [String] = [], timeout: TimeInterval = 5, environment: [String: String] = [:]) async -> Result? {
+    static func run(
+        _ command: String, arguments: [String] = [], timeout: TimeInterval = 5,
+        environment: [String: String] = [:]
+    ) async -> Result? {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -129,10 +135,11 @@ enum ProcessRunner {
             process.terminationHandler = { _ in
                 let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8) ?? ""
-                continuation.resume(returning: Result(
-                    output: output.trimmingCharacters(in: .whitespacesAndNewlines),
-                    exitCode: process.terminationStatus
-                ))
+                continuation.resume(
+                    returning: Result(
+                        output: output.trimmingCharacters(in: .whitespacesAndNewlines),
+                        exitCode: process.terminationStatus
+                    ))
             }
         }
     }

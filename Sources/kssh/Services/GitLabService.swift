@@ -4,7 +4,9 @@ struct GitLabService {
     /// Resolves the profile the token belongs to (username + avatar) on the configured
     /// instance. Returns nil when the token is empty or doesn't resolve — the UI hides
     /// the GitLab row then. `matchedKeyCount` is a secondary detail.
-    static func user(forKeys localKeys: [SSHKey], pat: String, instance: String) async -> RemoteUser? {
+    static func user(
+        forKeys localKeys: [SSHKey], pat: String, instance: String
+    ) async -> RemoteUser? {
         guard !pat.isEmpty else { return nil }
 
         let host = instance.isEmpty ? "gitlab.com" : instance
@@ -47,11 +49,14 @@ struct GitLabService {
     }
 
     /// Best-effort count of local SSH keys registered on the account; 0 on any failure.
-    private static func matchedKeyCount(forKeys localKeys: [SSHKey], pat: String, instance: String) async -> Int {
+    private static func matchedKeyCount(
+        forKeys localKeys: [SSHKey], pat: String, instance: String
+    ) async -> Int {
         guard !localKeys.isEmpty,
-              let url = URL(string: "https://\(instance)/api/v4/user/keys"),
-              let data = await get(url, pat: pat),
-              let keys = try? JSONDecoder().decode([GitLabKey].self, from: data) else {
+            let url = URL(string: "https://\(instance)/api/v4/user/keys"),
+            let data = await get(url, pat: pat),
+            let keys = try? JSONDecoder().decode([GitLabKey].self, from: data)
+        else {
             return 0
         }
         let localPublicKeys = Set(localKeys.map { normalizeKey($0.publicKey) })
@@ -61,14 +66,20 @@ struct GitLabService {
     /// Registers `publicKey` on the token's account via `POST /api/v4/user/keys`. 201 =
     /// created; a 400 (GitLab's "fingerprint has already been taken") maps to
     /// `.alreadyExists` for a friendly message.
-    static func addKey(title: String, publicKey: String, pat: String, instance: String) async -> Result<Void, RemoteKeyError> {
+    static func addKey(
+        title: String, publicKey: String, pat: String, instance: String
+    ) async -> Result<Void, RemoteKeyError> {
         guard !pat.isEmpty else { return .failure(.noToken) }
-        guard let request = addKeyRequest(title: title, publicKey: publicKey, pat: pat, instance: instance) else {
+        guard
+            let request = addKeyRequest(
+                title: title, publicKey: publicKey, pat: pat, instance: instance)
+        else {
             return .failure(.network)
         }
 
         guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else {
+            let http = response as? HTTPURLResponse
+        else {
             return .failure(.network)
         }
         switch http.statusCode {
@@ -80,14 +91,18 @@ struct GitLabService {
 
     /// Pure, testable builder for the add-key request, instance-aware. Lets tests assert
     /// the URL/method/headers/body without a network call.
-    static func addKeyRequest(title: String, publicKey: String, pat: String, instance: String) -> URLRequest? {
+    static func addKeyRequest(
+        title: String, publicKey: String, pat: String, instance: String
+    ) -> URLRequest? {
         let host = instance.isEmpty ? "gitlab.com" : instance
         guard let url = URL(string: "https://\(host)/api/v4/user/keys") else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(pat)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["title": title, "key": publicKey])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": title, "key": publicKey,
+        ])
         request.timeoutInterval = 10
         return request
     }
@@ -99,7 +114,8 @@ struct GitLabService {
         request.timeoutInterval = 10
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let http = response as? HTTPURLResponse, http.statusCode == 200
+        else {
             return nil
         }
         return data
